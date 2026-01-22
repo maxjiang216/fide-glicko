@@ -1,0 +1,3 @@
+# Python dependencies for FIDE Glicko rating system
+# Add your dependencies here
+
