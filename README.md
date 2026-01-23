@@ -6,21 +6,30 @@ A Python implementation of the FIDE Glicko rating system for chess players.
 
 This project implements the Glicko rating system as used by FIDE (Fédération Internationale des Échecs) for calculating chess player ratings. The Glicko system is an improvement over the Elo rating system, incorporating rating deviation (RD) to better represent the uncertainty in a player's rating.
 
-## Features
-
-- Calculate Glicko ratings based on game results
-- Update player ratings after matches
-- Handle rating deviations (RD)
-- Support for multiple players and tournaments
+**Architecture:**
+- **Python**: Exploratory work and prototyping
+- **Go**: Heavy web scraping
+- **Rust**: Core rating computations
 
 ## Installation
 
-```bash
-# Clone the repository
-git clone https://github.com/YOUR_USERNAME/fide-glicko.git
-cd fide-glicko
+### Python (Exploratory Work)
 
-# Install dependencies (if using virtual environment)
+We use `uv` for fast Python dependency management:
+
+```bash
+# Install uv (if not already installed)
+curl -LsSf https://astral.sh/uv/install.sh | sh
+
+# Install dependencies
+uv pip install -r requirements.txt
+
+# Or use uv to run scripts directly
+uv run exploratory/get_federations.py
+```
+
+Alternatively, use standard pip:
+```bash
 python -m venv venv
 source venv/bin/activate  # On Windows: venv\Scripts\activate
 pip install -r requirements.txt
@@ -39,4 +48,3 @@ MIT License
 ## Contributing
 
 Contributions are welcome! Please feel free to submit a Pull Request.
-

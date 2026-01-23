@@ -19,12 +19,14 @@ wheels/
 *.egg-info/
 .installed.cfg
 *.egg
+.python-version
 
 # Virtual Environment
 venv/
 env/
 ENV/
 .venv
+uv.lock
 
 # IDE
 .vscode/
@@ -43,3 +45,5 @@ Thumbs.db
 .coverage
 htmlcov/
 
+exploratory/data/
+exploratory/OPTIMIZATION_NOTES.md
