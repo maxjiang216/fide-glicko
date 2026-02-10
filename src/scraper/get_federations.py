@@ -14,14 +14,16 @@ from bs4 import BeautifulSoup
 URL = "https://ratings.fide.com/rated_tournaments.phtml"
 
 
-def get_federations_with_retries(max_retries: int = 3, retry_delay: float = 1.0) -> List[Dict[str, str]]:
+def get_federations_with_retries(
+    max_retries: int = 3, retry_delay: float = 1.0
+) -> List[Dict[str, str]]:
     """
     Scrape federations from FIDE website with retry logic.
-    
+
     Args:
         max_retries: Maximum number of retry attempts
         retry_delay: Delay in seconds between retries
-        
+
     Returns:
         List of dictionaries with 'code' and 'name' keys
     """
@@ -44,10 +46,7 @@ def get_federations_with_retries(max_retries: int = 3, retry_delay: float = 1.0)
 
                 # Skip the placeholder option
                 if value and value.lower() != "all":
-                    federations.append({
-                        "code": value,
-                        "name": name
-                    })
+                    federations.append({"code": value, "name": name})
 
             return federations
         except (requests.RequestException, RuntimeError) as e:
@@ -67,33 +66,33 @@ def main():
         "-d",
         type=str,
         default="data",
-        help="Directory to output the result (default: 'data' from repo root)"
+        help="Directory to output the result (default: 'data' from repo root)",
     )
     parser.add_argument(
         "--filename",
         "-f",
         type=str,
         default="federations.csv",
-        help="Output filename (default: federations.csv)"
+        help="Output filename (default: federations.csv)",
     )
     parser.add_argument(
         "--quiet",
         "-q",
         action="store_true",
-        help="Disable verbose output (default: verbose is enabled)"
+        help="Disable verbose output (default: verbose is enabled)",
     )
     parser.add_argument(
         "--override",
         "-o",
         action="store_true",
-        help="Override existing file and scrape again"
+        help="Override existing file and scrape again",
     )
 
     args = parser.parse_args()
-    
+
     # Verbose is True by default, unless --quiet is specified
     verbose = not args.quiet
-    
+
     # Determine output path (relative to repo root)
     # From src/scraper/get_federations.py, go up 3 levels to reach repo root
     repo_root = Path(__file__).parent.parent.parent
@@ -103,14 +102,16 @@ def main():
 
     # Check if file already exists
     if output_file.exists() and not args.override:
-        print(f"File {output_file} already exists. Use --override to scrape and replace.")
+        print(
+            f"File {output_file} already exists. Use --override to scrape and replace."
+        )
         return 0
 
     start_time = time.time()
 
     if verbose:
         print("Fetching federations list...")
-    
+
     try:
         federations = get_federations_with_retries()
     except Exception as e:
@@ -120,28 +121,27 @@ def main():
     elapsed_time = time.time() - start_time
 
     # Write to CSV
-    with open(output_file, 'w', newline='', encoding='utf-8') as f:
+    with open(output_file, "w", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
-        writer.writerow(['code', 'name'])
+        writer.writerow(["code", "name"])
         for fed in federations:
-            writer.writerow([fed['code'], fed['name']])
+            writer.writerow([fed["code"], fed["name"]])
 
     if verbose:
         # Print all federations
         for fed in federations:
             print(f"{fed['code']}: {fed['name']}")
-        
+
         # Print count
         print(f"\nFound {len(federations)} federations")
-        
+
         # Print time taken
         print(f"Time taken: {elapsed_time:.2f} seconds")
-    
+
     print(f"Saved {len(federations)} federations to {output_file}")
-    
+
     return 0
 
 
 if __name__ == "__main__":
     exit(main())
-
