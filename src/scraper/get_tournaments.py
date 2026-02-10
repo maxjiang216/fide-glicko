@@ -26,8 +26,7 @@ PERIODS_URL = "https://ratings.fide.com/a_tournaments_panel.php"
 
 # Configure logging
 logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s'
+    level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
 )
 logger = logging.getLogger(__name__)
 
@@ -39,6 +38,7 @@ _shutdown_state = {}
 @dataclass
 class Tournament:
     """Represents a tournament with its metadata."""
+
     tournament_id: str
     name: str
     location: str
@@ -89,15 +89,13 @@ def read_federations(federations_path: Path) -> List[Tuple[str, str]]:
         raise FileNotFoundError(f"Federations file not found: {federations_path}")
 
     federations = []
-    with open(federations_path, 'r', encoding='utf-8') as f:
+    with open(federations_path, "r", encoding="utf-8") as f:
         reader = csv.DictReader(f)
-        if 'code' not in reader.fieldnames or 'name' not in reader.fieldnames:
-            raise ValueError(
-                "CSV file must contain 'code' and 'name' columns"
-            )
+        if "code" not in reader.fieldnames or "name" not in reader.fieldnames:
+            raise ValueError("CSV file must contain 'code' and 'name' columns")
         for row in reader:
-            code = row['code'].strip()
-            name = row['name'].strip()
+            code = row["code"].strip()
+            name = row["name"].strip()
             if code:  # Skip empty rows
                 federations.append((code, name))
 
@@ -124,13 +122,13 @@ def parse_tournament_row(row: List, federation: str) -> Optional[Tournament]:
 
         # Extract name from HTML link: "<a href=\/report.phtml?event=399495>4th Annual Forester Open<\/a>"
         name_html = row[1] if len(row) > 1 else ""
-        name_start = name_html.find('>') + 1
-        name_end = name_html.find('</a>')
+        name_start = name_html.find(">") + 1
+        name_end = name_html.find("</a>")
         if name_start > 0 and name_end > 0:
             name = name_html[name_start:name_end]
         else:
             # Fallback: try to extract from any HTML
-            name = re.sub(r'<[^>]+>', '', name_html).strip() or name_html
+            name = re.sub(r"<[^>]+>", "", name_html).strip() or name_html
 
         location = row[2] if len(row) > 2 else ""
         time_control = row[3] if len(row) > 3 else "s"
@@ -138,12 +136,12 @@ def parse_tournament_row(row: List, federation: str) -> Optional[Tournament]:
 
         # End date is in a link too
         end_html = row[5] if len(row) > 5 else ""
-        end_start = end_html.find('>') + 1
-        end_end = end_html.find('</a>')
+        end_start = end_html.find(">") + 1
+        end_end = end_html.find("</a>")
         if end_start > 0 and end_end > 0:
             end_date = end_html[end_start:end_end]
         else:
-            end_date = re.sub(r'<[^>]+>', '', end_html).strip() or end_html
+            end_date = re.sub(r"<[^>]+>", "", end_html).strip() or end_html
 
         return Tournament(
             tournament_id=tournament_id,
@@ -207,19 +205,19 @@ async def fetch_federation_tournaments(
                     if resp.status != 200:
                         error_msg = f"HTTP {resp.status}"
                         if attempt < max_retries - 1:
-                            await asyncio.sleep(retry_delay * (2 ** attempt))
+                            await asyncio.sleep(retry_delay * (2**attempt))
                             continue
                         return (code, name, [], error_msg)
 
                     # Read response as text first, then parse as JSON
                     # This gives us more control and matches curl's behavior
                     text = await resp.text()
-                    
+
                     # Check if it looks like HTML (starts with <)
-                    if text.strip().startswith('<'):
+                    if text.strip().startswith("<"):
                         error_msg = f"Server returned HTML instead of JSON (got {len(text)} chars)"
                         if attempt < max_retries - 1:
-                            await asyncio.sleep(retry_delay * (2 ** attempt))
+                            await asyncio.sleep(retry_delay * (2**attempt))
                             continue
                         return (code, name, [], error_msg)
 
@@ -229,7 +227,7 @@ async def fetch_federation_tournaments(
                     except json.JSONDecodeError as e:
                         error_msg = f"Failed to parse JSON response: {e}"
                         if attempt < max_retries - 1:
-                            await asyncio.sleep(retry_delay * (2 ** attempt))
+                            await asyncio.sleep(retry_delay * (2**attempt))
                             continue
                         return (code, name, [], error_msg)
 
@@ -248,19 +246,19 @@ async def fetch_federation_tournaments(
             except asyncio.TimeoutError:
                 error_msg = "Timeout"
                 if attempt < max_retries - 1:
-                    await asyncio.sleep(retry_delay * (2 ** attempt))
+                    await asyncio.sleep(retry_delay * (2**attempt))
                     continue
                 return (code, name, [], error_msg)
             except json.JSONDecodeError as e:
                 error_msg = f"JSON decode error: {e}"
                 if attempt < max_retries - 1:
-                    await asyncio.sleep(retry_delay * (2 ** attempt))
+                    await asyncio.sleep(retry_delay * (2**attempt))
                     continue
                 return (code, name, [], error_msg)
             except Exception as e:
                 error_msg = str(e)
                 if attempt < max_retries - 1:
-                    await asyncio.sleep(retry_delay * (2 ** attempt))
+                    await asyncio.sleep(retry_delay * (2**attempt))
                     continue
                 return (code, name, [], error_msg)
 
@@ -314,14 +312,14 @@ def graceful_shutdown(signum: int, frame) -> None:
     logger.warning(f"\nReceived {signal_name}, initiating graceful shutdown...")
 
     # Get state from module-level dict
-    all_tournaments = _shutdown_state.get('all_tournaments', [])
-    output_path = _shutdown_state.get('output_path')
-    log_path = _shutdown_state.get('log_path')
-    log_entries = _shutdown_state.get('log_entries', [])
-    processed_count = _shutdown_state.get('processed_count', 0)
-    total_federations = _shutdown_state.get('total_federations', 0)
-    processing_start_time = _shutdown_state.get('processing_start_time', time.time())
-    output_format = _shutdown_state.get('output_format', 'ids')
+    all_tournaments = _shutdown_state.get("all_tournaments", [])
+    output_path = _shutdown_state.get("output_path")
+    log_path = _shutdown_state.get("log_path")
+    log_entries = _shutdown_state.get("log_entries", [])
+    processed_count = _shutdown_state.get("processed_count", 0)
+    total_federations = _shutdown_state.get("total_federations", 0)
+    processing_start_time = _shutdown_state.get("processing_start_time", time.time())
+    output_format = _shutdown_state.get("output_format", "ids")
 
     # Remove duplicates
     seen_ids = set()
@@ -349,20 +347,22 @@ def graceful_shutdown(signum: int, frame) -> None:
                 }
                 for t in unique_tournaments
             ]
-            
+
             # Save IDs file
             ids_path = output_path
             ids_path.parent.mkdir(parents=True, exist_ok=True)
-            with open(ids_path, 'w', encoding='utf-8') as f:
+            with open(ids_path, "w", encoding="utf-8") as f:
                 for t in unique_tournaments:
                     f.write(f"{t.tournament_id}\n")
-            
+
             # Save JSON file
-            json_path = output_path.parent.parent / "tournament_ids_json" / output_path.name
+            json_path = (
+                output_path.parent.parent / "tournament_ids_json" / output_path.name
+            )
             if json_path.suffix != ".json":
                 json_path = json_path.with_suffix(".json")
             json_path.parent.mkdir(parents=True, exist_ok=True)
-            with open(json_path, 'w', encoding='utf-8') as f:
+            with open(json_path, "w", encoding="utf-8") as f:
                 json.dump(output_data, f, indent=2, ensure_ascii=False)
 
             logger.info(
@@ -375,7 +375,7 @@ def graceful_shutdown(signum: int, frame) -> None:
     if log_entries and log_path:
         try:
             log_path.parent.mkdir(parents=True, exist_ok=True)
-            with open(log_path, 'w', encoding='utf-8') as f:
+            with open(log_path, "w", encoding="utf-8") as f:
                 for entry in log_entries:
                     f.write(f"{entry}\n")
             logger.info(f"Saved {len(log_entries)} log entries to {log_path}")
@@ -448,14 +448,14 @@ async def scrape_month(
 
     # Set up signal handlers for graceful shutdown
     _shutdown_state = {
-        'all_tournaments': [],
-        'output_path': output_path,
-        'log_path': None,  # Will be set if log_entries exist
-        'log_entries': [],
-        'processed_count': 0,
-        'total_federations': len(federations),
-        'processing_start_time': start_time,
-        'output_format': output_format,
+        "all_tournaments": [],
+        "output_path": output_path,
+        "log_path": None,  # Will be set if log_entries exist
+        "log_entries": [],
+        "processed_count": 0,
+        "total_federations": len(federations),
+        "processing_start_time": start_time,
+        "output_format": output_format,
     }
 
     signal.signal(signal.SIGINT, graceful_shutdown)
@@ -492,9 +492,9 @@ async def scrape_month(
             processed_count += 1
 
             # Update shutdown state
-            _shutdown_state['all_tournaments'] = all_tournaments
-            _shutdown_state['processed_count'] = processed_count
-            _shutdown_state['log_entries'] = errors
+            _shutdown_state["all_tournaments"] = all_tournaments
+            _shutdown_state["processed_count"] = processed_count
+            _shutdown_state["log_entries"] = errors
 
             if error:
                 errors.append(f"{code} ({name}): {error}")
@@ -547,16 +547,16 @@ async def scrape_month(
     # IDs file
     ids_path = output_path
     ids_path.parent.mkdir(parents=True, exist_ok=True)
-    with open(ids_path, 'w', encoding='utf-8') as f:
+    with open(ids_path, "w", encoding="utf-8") as f:
         for t in unique_tournaments:
             f.write(f"{t.tournament_id}\n")
-    
+
     # JSON file (always saved, prettified)
     json_path = output_path.parent.parent / "tournament_ids_json" / output_path.name
     if json_path.suffix != ".json":
         json_path = json_path.with_suffix(".json")
     json_path.parent.mkdir(parents=True, exist_ok=True)
-    with open(json_path, 'w', encoding='utf-8') as f:
+    with open(json_path, "w", encoding="utf-8") as f:
         json.dump(output_data, f, indent=2, ensure_ascii=False)
 
     elapsed = time.time() - start_time
@@ -569,7 +569,9 @@ async def scrape_month(
     # Summary
     print("\n" + "=" * 80)
     print("Summary:")
-    print(f"  Federations processed: {len(federations) - len(errors)}/{len(federations)}")
+    print(
+        f"  Federations processed: {len(federations) - len(errors)}/{len(federations)}"
+    )
     print(f"  Errors: {len(errors)}")
     print(f"  Total tournaments: {len(all_tournaments)}")
     print(f"  Unique tournaments: {len(unique_tournaments)}")
@@ -594,62 +596,53 @@ def main() -> int:
         description="Fast FIDE tournament scraper using direct AJAX calls"
     )
     parser.add_argument(
-        "--year",
-        type=int,
-        required=True,
-        help="Year to scrape (e.g., 2025)"
+        "--year", type=int, required=True, help="Year to scrape (e.g., 2025)"
     )
     parser.add_argument(
-        "--month",
-        type=int,
-        required=True,
-        help="Month to scrape (1-12)"
+        "--month", type=int, required=True, help="Month to scrape (1-12)"
     )
     parser.add_argument(
         "--federations",
         "-f",
         type=str,
         default="data/federations.csv",
-        help="Path to federations CSV file (default: data/federations.csv from repo root)"
+        help="Path to federations CSV file (default: data/federations.csv from repo root)",
     )
     parser.add_argument(
         "--output",
         "-o",
         type=str,
         default=None,
-        help="Output file path (default: data/tournament_ids_YYYY_MM from repo root)"
+        help="Output file path (default: data/tournament_ids_YYYY_MM from repo root)",
     )
     parser.add_argument(
         "--format",
         choices=["ids", "json"],
         default="ids",
-        help="Output format: 'ids' for just IDs, 'json' for full tournament data"
+        help="Output format: 'ids' for just IDs, 'json' for full tournament data",
     )
     parser.add_argument(
         "--concurrency",
         "-c",
         type=int,
         default=10,
-        help="Maximum number of concurrent requests (default: 10)"
+        help="Maximum number of concurrent requests (default: 10)",
     )
     parser.add_argument(
         "--max-retries",
         "-r",
         type=int,
         default=3,
-        help="Maximum number of retries per federation (default: 3)"
+        help="Maximum number of retries per federation (default: 3)",
     )
     parser.add_argument(
         "--retry-delay",
         type=float,
         default=1.0,
-        help="Base delay in seconds between retries (default: 1.0)"
+        help="Base delay in seconds between retries (default: 1.0)",
     )
     parser.add_argument(
-        "--quiet",
-        "-q",
-        action="store_true",
-        help="Disable verbose output"
+        "--quiet", "-q", action="store_true", help="Disable verbose output"
     )
 
     args = parser.parse_args()
@@ -673,7 +666,9 @@ def main() -> int:
             output_path = repo_root / output_path
     else:
         # Always save to tournament_ids subfolder (format flag only affects which is primary)
-        output_path = repo_root / "data" / "tournament_ids" / f"{args.year}_{args.month:02d}"
+        output_path = (
+            repo_root / "data" / "tournament_ids" / f"{args.year}_{args.month:02d}"
+        )
 
     # Run the scraper
     try:
@@ -700,4 +695,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     sys.exit(main())
-
