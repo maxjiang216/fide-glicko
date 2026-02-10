@@ -7,13 +7,18 @@ A Python implementation of the FIDE Glicko rating system for chess players.
 This project implements the Glicko rating system as used by FIDE (Fédération Internationale des Échecs) for calculating chess player ratings. The Glicko system is an improvement over the Elo rating system, incorporating rating deviation (RD) to better represent the uncertainty in a player's rating.
 
 **Architecture:**
-- **Python**: Exploratory work and prototyping
-- **Go**: Heavy web scraping
-- **Rust**: Core rating computations
+- **Python**: Exploratory work, prototyping, and web scraping
+- **Rust**: Core rating computations (planned)
+
+## Project Structure
+
+- **`src/`**: Production-ready source code
+  - **`src/scraper/`**: FIDE website scraping scripts (see [src/scraper/README.md](src/scraper/README.md) for detailed documentation)
+- **`exploratory/`**: Experimental code, prototypes, and one-off analysis scripts
+- **`data/`**: Scraped data and intermediate files
+- **`scripts/`**: Utility scripts and automation tools
 
 ## Installation
-
-### Python (Exploratory Work)
 
 We use `uv` for fast Python dependency management:
 
@@ -22,24 +27,45 @@ We use `uv` for fast Python dependency management:
 curl -LsSf https://astral.sh/uv/install.sh | sh
 
 # Install dependencies
-uv pip install -r requirements.txt
+uv sync
 
 # Or use uv to run scripts directly
-uv run exploratory/get_federations.py
+uv run src/scraper/get_federations.py
 ```
 
 Alternatively, use standard pip:
 ```bash
 python -m venv venv
 source venv/bin/activate  # On Windows: venv\Scripts\activate
-pip install -r requirements.txt
+pip install -e .
 ```
 
 ## Usage
 
-```python
-# Example usage will be added here
-```
+### Web Scraping
+
+The project includes Python scripts for scraping tournament data from the FIDE website. For detailed documentation on all scraping scripts, command-line options, and usage examples, see:
+
+**[src/scraper/README.md](src/scraper/README.md)**
+
+**Quick Start:**
+
+1. **Get federations list:**
+   ```bash
+   uv run src/scraper/get_federations.py
+   ```
+
+2. **Get tournament IDs for a month:**
+   ```bash
+   uv run src/scraper/get_tournaments.py --year 2025 --month 12
+   ```
+
+3. **Get detailed tournament information:**
+   ```bash
+   uv run src/scraper/get_tournament_details.py --year 2025 --month 12
+   ```
+
+The scraper outputs data in efficient Parquet format with JSON samples for quick inspection. See the [scraper README](src/scraper/README.md) for complete documentation.
 
 ## License
 
