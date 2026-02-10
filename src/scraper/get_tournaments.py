@@ -333,32 +333,40 @@ def graceful_shutdown(signum: int, frame) -> None:
 
     unique_tournaments.sort(key=lambda t: int(t.tournament_id))
 
-    # Save partial results
+    # Save partial results (both formats)
     if output_path and unique_tournaments:
         try:
-            output_path.parent.mkdir(parents=True, exist_ok=True)
-            if output_format == "json":
-                output_data = [
-                    {
-                        "tournament_id": t.tournament_id,
-                        "name": t.name,
-                        "location": t.location,
-                        "time_control": t.time_control,
-                        "start_date": t.start_date,
-                        "end_date": t.end_date,
-                        "federation": t.federation,
-                    }
-                    for t in unique_tournaments
-                ]
-                with open(output_path, 'w', encoding='utf-8') as f:
-                    json.dump(output_data, f, indent=2, ensure_ascii=False)
-            else:
-                with open(output_path, 'w', encoding='utf-8') as f:
-                    for t in unique_tournaments:
-                        f.write(f"{t.tournament_id}\n")
+            # Prepare JSON data
+            output_data = [
+                {
+                    "tournament_id": t.tournament_id,
+                    "name": t.name,
+                    "location": t.location,
+                    "time_control": t.time_control,
+                    "start_date": t.start_date,
+                    "end_date": t.end_date,
+                    "federation": t.federation,
+                }
+                for t in unique_tournaments
+            ]
+            
+            # Save IDs file
+            ids_path = output_path
+            ids_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(ids_path, 'w', encoding='utf-8') as f:
+                for t in unique_tournaments:
+                    f.write(f"{t.tournament_id}\n")
+            
+            # Save JSON file
+            json_path = output_path.parent.parent / "tournament_ids_json" / output_path.name
+            if json_path.suffix != ".json":
+                json_path = json_path.with_suffix(".json")
+            json_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(json_path, 'w', encoding='utf-8') as f:
+                json.dump(output_data, f, indent=2, ensure_ascii=False)
 
             logger.info(
-                f"Saved {len(unique_tournaments)} unique tournament IDs to {output_path}"
+                f"Saved {len(unique_tournaments)} unique tournament IDs to {ids_path} and {json_path}"
             )
         except Exception as e:
             logger.error(f"Error saving partial results: {e}")
@@ -383,7 +391,12 @@ def graceful_shutdown(signum: int, frame) -> None:
     print(f"  Unique tournament IDs: {len(unique_tournaments)}")
     print(f"  Time elapsed: {format_time(elapsed_time)}")
     if output_path:
-        print(f"  Partial results saved to: {output_path}")
+        ids_path = output_path
+        json_path = output_path.parent.parent / "tournament_ids_json" / output_path.name
+        if json_path.suffix != ".json":
+            json_path = json_path.with_suffix(".json")
+        print(f"  IDs file: {ids_path}")
+        print(f"  JSON file: {json_path}")
     if log_entries and log_path:
         print(f"  Log saved to: {log_path}")
     print("=" * 80)
@@ -516,30 +529,35 @@ async def scrape_month(
     # Sort by ID
     unique_tournaments.sort(key=lambda t: int(t.tournament_id))
 
-    # Write output
-    output_path.parent.mkdir(parents=True, exist_ok=True)
+    # Prepare JSON data
+    output_data = [
+        {
+            "tournament_id": t.tournament_id,
+            "name": t.name,
+            "location": t.location,
+            "time_control": t.time_control,
+            "start_date": t.start_date,
+            "end_date": t.end_date,
+            "federation": t.federation,
+        }
+        for t in unique_tournaments
+    ]
 
-    if output_format == "json":
-        # Full tournament data
-        output_data = [
-            {
-                "tournament_id": t.tournament_id,
-                "name": t.name,
-                "location": t.location,
-                "time_control": t.time_control,
-                "start_date": t.start_date,
-                "end_date": t.end_date,
-                "federation": t.federation,
-            }
-            for t in unique_tournaments
-        ]
-        with open(output_path, 'w', encoding='utf-8') as f:
-            json.dump(output_data, f, indent=2, ensure_ascii=False)
-    else:
-        # Just IDs
-        with open(output_path, 'w', encoding='utf-8') as f:
-            for t in unique_tournaments:
-                f.write(f"{t.tournament_id}\n")
+    # Write both formats to separate subfolders
+    # IDs file
+    ids_path = output_path
+    ids_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(ids_path, 'w', encoding='utf-8') as f:
+        for t in unique_tournaments:
+            f.write(f"{t.tournament_id}\n")
+    
+    # JSON file (always saved, prettified)
+    json_path = output_path.parent.parent / "tournament_ids_json" / output_path.name
+    if json_path.suffix != ".json":
+        json_path = json_path.with_suffix(".json")
+    json_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(json_path, 'w', encoding='utf-8') as f:
+        json.dump(output_data, f, indent=2, ensure_ascii=False)
 
     elapsed = time.time() - start_time
 
@@ -556,7 +574,8 @@ async def scrape_month(
     print(f"  Total tournaments: {len(all_tournaments)}")
     print(f"  Unique tournaments: {len(unique_tournaments)}")
     print(f"  Time taken: {format_time(elapsed)}")
-    print(f"  Output file: {output_path}")
+    print(f"  IDs file: {ids_path}")
+    print(f"  JSON file: {json_path}")
     if tc_counts:
         print(f"  By time control: {tc_counts}")
     print("=" * 80)
@@ -653,8 +672,8 @@ def main() -> int:
         if not output_path.is_absolute():
             output_path = repo_root / output_path
     else:
-        ext = "json" if args.format == "json" else ""
-        output_path = repo_root / f"data/tournament_ids_{args.year}_{args.month:02d}{f'.{ext}' if ext else ''}"
+        # Always save to tournament_ids subfolder (format flag only affects which is primary)
+        output_path = repo_root / "data" / "tournament_ids" / f"{args.year}_{args.month:02d}"
 
     # Run the scraper
     try:
