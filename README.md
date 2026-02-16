@@ -79,4 +79,4 @@ MIT License
 
 ## Contributing
 
-Contributions are welcome! Please feel free to submit a Pull Request.
+Contributions are welcome! Feel free to contribute however you like—see [CONTRIBUTING.md](CONTRIBUTING.md) for more details. Reach out to me via [email](mailto:maxjiang216@gmail.com) if you have any questions.
