@@ -65,6 +65,12 @@ The project includes Python scripts for scraping tournament data from the FIDE w
    uv run src/scraper/get_tournament_details.py --year 2025 --month 12
    ```
 
+4. **Get tournament reports (games) — run after details:**
+   ```bash
+   uv run src/scraper/get_tournament_reports.py --year 2025 --month 12
+   ```
+   The reports scraper reads tournament codes from the details output and extracts game results.
+
 The scraper outputs data in efficient Parquet format with JSON samples for quick inspection. See the [scraper README](src/scraper/README.md) for complete documentation.
 
 ## License

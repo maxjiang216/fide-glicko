@@ -592,8 +592,12 @@ def main():
         0  # Total number of tournaments that have been retried at least once
     )
     profile_samples: List[Dict[str, float]] = [] if args.profile else []
-    attempt_log: List[Dict] = [] if args.verbose_errors else []  # Shared across all fetches
-    attempt_counts: List[Tuple[str, int]] = [] if args.verbose_errors else []  # (tid, n) in order
+    attempt_log: List[Dict] = (
+        [] if args.verbose_errors else []
+    )  # Shared across all fetches
+    attempt_counts: List[Tuple[str, int]] = (
+        [] if args.verbose_errors else []
+    )  # (tid, n) in order
 
     current_tournaments = tournament_ids
 
@@ -629,7 +633,12 @@ def main():
                 prev = profile_samples[-1]
                 cycle_s = now - last_cycle_start
                 prev["cycle_s"] = cycle_s
-                prev["other_s"] = cycle_s - prev.get("wait_s", 0) - prev.get("fetch_s", 0) - prev.get("parse_s", 0)
+                prev["other_s"] = (
+                    cycle_s
+                    - prev.get("wait_s", 0)
+                    - prev.get("fetch_s", 0)
+                    - prev.get("parse_s", 0)
+                )
             last_cycle_start = now
 
             t_wait = time.perf_counter()
@@ -646,7 +655,9 @@ def main():
             )
             if args.verbose_errors:
                 attempt_counts.append((tournament_id, num_attempts))
-            fetch_total_s = (time.perf_counter() - t_fetch_start) if t_fetch_start else 0
+            fetch_total_s = (
+                (time.perf_counter() - t_fetch_start) if t_fetch_start else 0
+            )
             if args.profile and profile:
                 profile["wait_s"] = wait_s
                 profile["fetch_total_s"] = fetch_total_s
@@ -718,7 +729,9 @@ def main():
                 if result["success"]:
                     name = result.get("details", {}).get("tournament_name", "unknown")
                     retry_info = f" [Retry pass {pass_num + 1}]" if pass_num > 0 else ""
-                    http_retries = f" [{num_attempts} HTTP attempts]" if num_attempts > 1 else ""
+                    http_retries = (
+                        f" [{num_attempts} HTTP attempts]" if num_attempts > 1 else ""
+                    )
                     print(
                         f"[{total_processed}/{len(tournament_ids)}] ✓ {tournament_id}: {name}{retry_info}{http_retries} | "
                         f"Rate: {rate:.2f}/s (actual: {actual_rate:.2f}/s) | "
@@ -729,7 +742,9 @@ def main():
                     error_msg = result.get("error", "unknown")
                     will_retry = tournament_id in pass_failed
                     retry_info = f" [Retry pass {pass_num + 1}]" if pass_num > 0 else ""
-                    http_retries = f" [{num_attempts} HTTP attempts]" if num_attempts > 1 else ""
+                    http_retries = (
+                        f" [{num_attempts} HTTP attempts]" if num_attempts > 1 else ""
+                    )
                     retry_status = " [WILL RETRY]" if will_retry else " [FINAL FAILURE]"
 
                     print(
@@ -796,7 +811,12 @@ def main():
                     f"Actual: {actual_rate:.2f}/s | Target: {target_rate:.2f}/s | "
                     f"Elapsed: {format_duration(elapsed)} | Est: {format_duration(est_remaining)}"
                 )
-            if args.profile and profile_samples and t_post is not None and t_before_periodic is not None:
+            if (
+                args.profile
+                and profile_samples
+                and t_post is not None
+                and t_before_periodic is not None
+            ):
                 pf = time.perf_counter() - t_post
                 pl = time.perf_counter() - t_before_periodic
                 profile_samples[-1]["post_fetch_s"] = pf
@@ -850,7 +870,12 @@ def main():
             if len(tids) <= max_show:
                 logger.info("  Tournaments needing retries (in order): %s", tids)
             else:
-                logger.info("  Tournaments needing retries (first %d): %s ... and %d more", max_show, tids[:max_show], len(tids) - max_show)
+                logger.info(
+                    "  Tournaments needing retries (first %d): %s ... and %d more",
+                    max_show,
+                    tids[:max_show],
+                    len(tids) - max_show,
+                )
         if error_counts:
             logger.info("  Error breakdown: %s", dict(error_counts))
 
@@ -869,13 +894,21 @@ def main():
         logger.info("  HTML parse:      %.3fs", parse_avg)
         fetch_total_avg = sum(p.get("fetch_total_s", 0) for p in profile_samples) / n
         logger.info("  fetch_total (wall): %.3fs", fetch_total_avg)
-        n_retries = sum(1 for p in profile_samples if p.get("_attempt_times") and len(p["_attempt_times"]) > 1)
-        sum_all_attempts = sum(sum(p.get("_attempt_times", [0])) for p in profile_samples)
+        n_retries = sum(
+            1
+            for p in profile_samples
+            if p.get("_attempt_times") and len(p["_attempt_times"]) > 1
+        )
+        sum_all_attempts = sum(
+            sum(p.get("_attempt_times", [0])) for p in profile_samples
+        )
         sum_fetch_only = sum(p.get("fetch_s", 0) for p in profile_samples)
         extra_from_retries = sum_all_attempts - sum_fetch_only
         logger.info(
             "  Retries: %d/%d had >1 HTTP attempt (failed attempts + backoff = %.2fs total extra)",
-            n_retries, n, extra_from_retries,
+            n_retries,
+            n,
+            extra_from_retries,
         )
         logger.info("  Measured (wait+fetch+parse): %.3fs", measured_avg)
         if n_cycle > 0:
@@ -885,19 +918,43 @@ def main():
             other_max = max(p["other_s"] for p in samples_with_cycle)
             logger.info("  ---")
             logger.info("  Cycle (wall time per item, n=%d): %.3fs", n_cycle, cycle_avg)
-            logger.info("  Other (cycle - measured): %.3fs (min=%.3fs max=%.3fs)", other_avg, other_min, other_max)
-            logger.info("  Check: measured + other = %.3fs (should ≈ cycle)", measured_avg + other_avg)
+            logger.info(
+                "  Other (cycle - measured): %.3fs (min=%.3fs max=%.3fs)",
+                other_avg,
+                other_min,
+                other_max,
+            )
+            logger.info(
+                "  Check: measured + other = %.3fs (should ≈ cycle)",
+                measured_avg + other_avg,
+            )
             n_with_pf = sum(1 for p in profile_samples if "post_fetch_s" in p)
             if n_with_pf > 0:
-                post_vals = [p["post_fetch_s"] for p in profile_samples if "post_fetch_s" in p]
+                post_vals = [
+                    p["post_fetch_s"] for p in profile_samples if "post_fetch_s" in p
+                ]
                 post_avg = sum(post_vals) / len(post_vals)
                 post_min, post_max = min(post_vals), max(post_vals)
                 ckpt_avg = sum(p.get("checkpoint_s", 0) for p in profile_samples) / n
                 pbar_avg = sum(p.get("pbar_s", 0) for p in profile_samples) / n
-                periodic_avg = sum(p.get("periodic_log_s", 0) for p in profile_samples) / n
-                logger.info("  --- Breakdown of Other (n_with_post_fetch=%d):", n_with_pf)
-                logger.info("    post_fetch (to loop end): %.4fs (min=%.4fs max=%.4fs)", post_avg, post_min, post_max)
-                logger.info("    checkpoint: %.4fs | pbar: %.4fs | periodic_log: %.4fs", ckpt_avg, pbar_avg, periodic_avg)
+                periodic_avg = (
+                    sum(p.get("periodic_log_s", 0) for p in profile_samples) / n
+                )
+                logger.info(
+                    "  --- Breakdown of Other (n_with_post_fetch=%d):", n_with_pf
+                )
+                logger.info(
+                    "    post_fetch (to loop end): %.4fs (min=%.4fs max=%.4fs)",
+                    post_avg,
+                    post_min,
+                    post_max,
+                )
+                logger.info(
+                    "    checkpoint: %.4fs | pbar: %.4fs | periodic_log: %.4fs",
+                    ckpt_avg,
+                    pbar_avg,
+                    periodic_avg,
+                )
 
 
 if __name__ == "__main__":

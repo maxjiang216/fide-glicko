@@ -67,13 +67,13 @@ def parse_score(score_text: str) -> Optional[float]:
     """
     if not score_text:
         return None
-    
+
     score_text = score_text.strip().lower()
-    
+
     # Check for forfeit indicators
     if "forfeit" in score_text or score_text in ["-", "+"]:
         return None  # Will be stored as forfeit indicator separately
-    
+
     # Try to extract numeric score
     # Look for patterns like "1.0", "0.5", "0", "1"
     match = re.search(r"(\d+\.?\d*)", score_text)
@@ -84,7 +84,7 @@ def parse_score(score_text: str) -> Optional[float]:
                 return score
         except ValueError:
             pass
-    
+
     return None
 
 
@@ -92,9 +92,9 @@ def extract_forfeit_indicator(score_text: str) -> str:
     """Extract forfeit indicator from score text."""
     if not score_text:
         return ""
-    
+
     score_text = score_text.strip()
-    
+
     if "forfeit" in score_text.lower():
         if "-" in score_text or score_text.endswith("-"):
             return "-"
@@ -106,7 +106,7 @@ def extract_forfeit_indicator(score_text: str) -> str:
         return "-"
     elif score_text == "+":
         return "+"
-    
+
     return ""
 
 
@@ -182,7 +182,9 @@ def infer_date_format(
     details are provided, prefers format where all dates fall within [start, end].
     """
     candidates = ["yy/mm/dd", "dd/mm/yy"]
-    date_strs = [s for s in date_strings if s and re.match(r"\d{1,2}/\d{1,2}/\d{2,4}", s.strip())]
+    date_strs = [
+        s for s in date_strings if s and re.match(r"\d{1,2}/\d{1,2}/\d{2,4}", s.strip())
+    ]
     if not date_strs:
         return "yy/mm/dd"  # default
 
@@ -256,19 +258,19 @@ def parse_round_date(round_text: str) -> Tuple[Optional[int], Optional[str]]:
     """
     if not round_text:
         return None, None
-    
+
     # Match pattern: number followed by spaces and date
     match = re.match(r"(\d+)\s+(\d{2}/\d{2}/\d{2,4})", round_text.strip())
     if match:
         round_num = int(match.group(1))
         date_str = match.group(2)
         return round_num, date_str
-    
+
     # Try to extract just round number
     match = re.match(r"(\d+)", round_text.strip())
     if match:
         return int(match.group(1)), None
-    
+
     return None, None
 
 
@@ -291,7 +293,7 @@ def extract_color_from_cell(cell) -> str:
     """Extract color (white/black) from a table cell."""
     white_note = cell.find("span", class_="white_note")
     black_note = cell.find("span", class_="black_note")
-    
+
     if white_note:
         return "white"
     elif black_note:
@@ -346,7 +348,9 @@ def fetch_tournament_report(
 
     for attempt in range(max_retries):
         if attempt > 0:
-            delay = 0.1 * (2 ** (attempt - 1))  # Exponential backoff: 100ms, 200ms, 400ms
+            delay = 0.1 * (
+                2 ** (attempt - 1)
+            )  # Exponential backoff: 100ms, 200ms, 400ms
             time.sleep(delay)
 
         try:
@@ -430,12 +434,16 @@ def fetch_tournament_report(
 
                         # Try to parse rating and total as numbers
                         try:
-                            player_rating_int = int(player_rating) if player_rating else 0
+                            player_rating_int = (
+                                int(player_rating) if player_rating else 0
+                            )
                         except ValueError:
                             player_rating_int = 0
 
                         try:
-                            player_total_float = float(player_total) if player_total else 0.0
+                            player_total_float = (
+                                float(player_total) if player_total else 0.0
+                            )
                         except ValueError:
                             player_total_float = 0.0
 
@@ -456,7 +464,8 @@ def fetch_tournament_report(
                             next_cells = next_row.find_all("td")
                             if (
                                 len(next_cells) >= 7
-                                and next_cells[0].get_text(strip=True).lower() == "round"
+                                and next_cells[0].get_text(strip=True).lower()
+                                == "round"
                             ):
                                 i += 1  # Skip header row
 
@@ -469,25 +478,35 @@ def fetch_tournament_report(
                                 round_first_text = round_cells[0].get_text(strip=True)
                                 # Check if this is a round data row (starts with digit)
                                 if round_first_text and round_first_text[0].isdigit():
-                                    round_num, round_date = parse_round_date(round_first_text)
+                                    round_num, round_date = parse_round_date(
+                                        round_first_text
+                                    )
                                     opp_name = extract_text_from_cell(round_cells[1])
                                     opp_fed = round_cells[2].get_text(strip=True)
                                     title = round_cells[3].get_text(strip=True)
                                     wtitle = round_cells[4].get_text(strip=True)
-                                    opp_rating_text = round_cells[5].get_text(strip=True)
+                                    opp_rating_text = round_cells[5].get_text(
+                                        strip=True
+                                    )
                                     score_text = round_cells[6].get_text(strip=True)
 
                                     # Extract color from opponent name cell
                                     color = extract_color_from_cell(round_cells[1])
 
                                     # Extract opponent FIDE ID from href (e.g. #65 -> lookup anchor 65)
-                                    anchor = extract_href_anchor_from_cell(round_cells[1])
-                                    opp_id = anchor_to_id.get(anchor, "") if anchor else ""
+                                    anchor = extract_href_anchor_from_cell(
+                                        round_cells[1]
+                                    )
+                                    opp_id = (
+                                        anchor_to_id.get(anchor, "") if anchor else ""
+                                    )
 
                                     # Parse opponent rating
                                     try:
                                         opp_rating = (
-                                            int(opp_rating_text) if opp_rating_text else 0
+                                            int(opp_rating_text)
+                                            if opp_rating_text
+                                            else 0
                                         )
                                     except ValueError:
                                         opp_rating = 0
@@ -537,7 +556,11 @@ def fetch_tournament_report(
             if _profile is not None:
                 _profile["fetch_s"] = fetch_s
                 _profile["parse_s"] = parse_s
-            return {"tournament_code": tournament_code, "players": players}, None, len(attempt_times)
+            return (
+                {"tournament_code": tournament_code, "players": players},
+                None,
+                len(attempt_times),
+            )
 
         except requests.exceptions.Timeout as e:
             last_error = f"timeout: {e}"
@@ -777,14 +800,18 @@ def flatten_to_games(
             if color == "white":
                 white_score = 1.0 if forfeit == "+" else 0.0
             else:
-                white_score = 0.0 if forfeit == "+" else 1.0  # Black's forfeit- = white won
+                white_score = (
+                    0.0 if forfeit == "+" else 1.0
+                )  # Black's forfeit- = white won
         elif score is not None:
             white_score = float(score) if color == "white" else 1.0 - float(score)
         else:
             continue
 
         date_str = row.get("round_date", "")
-        date_iso = parse_date_to_iso(date_str, date_format=date_format) if date_str else ""
+        date_iso = (
+            parse_date_to_iso(date_str, date_format=date_format) if date_str else ""
+        )
 
         games.append(
             {
@@ -874,9 +901,7 @@ def save_verbose_json_sample(
         n = min(sample_size, len(all_flattened))
         rng = random.Random(42)
         sample = (
-            rng.sample(all_flattened, n)
-            if n < len(all_flattened)
-            else all_flattened
+            rng.sample(all_flattened, n) if n < len(all_flattened) else all_flattened
         )
         dirname = os.path.dirname(json_path)
         if dirname:
@@ -1025,7 +1050,9 @@ def main():
                         sd = parse_details_date_to_iso(str(row.get("start_date", "")))
                         ed = parse_details_date_to_iso(str(row.get("end_date", "")))
                         details_map[str(ec)] = (sd, ed)
-                logger.info(f"Loaded date bounds for {len(details_map)} tournaments from {args.details_path}")
+                logger.info(
+                    f"Loaded date bounds for {len(details_map)} tournaments from {args.details_path}"
+                )
             except Exception as e:
                 logger.warning(f"Could not load details for date inference: {e}")
     elif args.year > 0 and args.month > 0:
@@ -1045,18 +1072,26 @@ def main():
                 df = pd.read_parquet(details_path)
                 if "event_code" in df.columns:
                     success_df = df[df["success"] == True]
-                    tournament_codes = success_df["event_code"].dropna().astype(str).tolist()
+                    tournament_codes = (
+                        success_df["event_code"].dropna().astype(str).tolist()
+                    )
                     tournament_codes = [code for code in tournament_codes if code]
                     for _, row in success_df.iterrows():
                         ec = row.get("event_code")
                         if pd.notna(ec) and str(ec):
-                            sd = parse_details_date_to_iso(str(row.get("start_date", "")))
+                            sd = parse_details_date_to_iso(
+                                str(row.get("start_date", ""))
+                            )
                             ed = parse_details_date_to_iso(str(row.get("end_date", "")))
                             details_map[str(ec)] = (sd, ed)
                     if details_map:
-                        logger.info(f"Loaded date bounds for {len(details_map)} tournaments from details")
+                        logger.info(
+                            f"Loaded date bounds for {len(details_map)} tournaments from details"
+                        )
                 else:
-                    logger.error(f"Error: event_code column not found in {details_path}")
+                    logger.error(
+                        f"Error: event_code column not found in {details_path}"
+                    )
                     sys.exit(1)
             except Exception as e:
                 logger.error(f"Error reading tournament details: {e}")
@@ -1117,7 +1152,9 @@ def main():
         csv_path = base_path + "_sample.csv"
 
     logger.info(f"Processing {len(tournament_codes)} tournaments")
-    logger.info(f"Settings: checkpoint every {args.checkpoint} (no rate limit - natural throughput)")
+    logger.info(
+        f"Settings: checkpoint every {args.checkpoint} (no rate limit - natural throughput)"
+    )
 
     start_time = time.time()
 
@@ -1166,7 +1203,12 @@ def main():
                 prev = profile_samples[-1]
                 cycle_s = now - last_cycle_start
                 prev["cycle_s"] = cycle_s
-                prev["other_s"] = cycle_s - prev.get("wait_s", 0) - prev.get("fetch_s", 0) - prev.get("parse_s", 0)
+                prev["other_s"] = (
+                    cycle_s
+                    - prev.get("wait_s", 0)
+                    - prev.get("fetch_s", 0)
+                    - prev.get("parse_s", 0)
+                )
             last_cycle_start = now
 
             profile = {} if args.profile else None
@@ -1190,8 +1232,12 @@ def main():
                 result["error"] = error or "fetch failed"
                 error_lower = error.lower() if error else ""
                 network_error_patterns = [
-                    "eof", "connection reset", "connection aborted",
-                    "remotedisconnected", "remote end closed", "broken pipe",
+                    "eof",
+                    "connection reset",
+                    "connection aborted",
+                    "remotedisconnected",
+                    "remote end closed",
+                    "broken pipe",
                 ]
                 is_network_error = any(p in error_lower for p in network_error_patterns)
                 if error and (is_network_error or "timeout" in error_lower):
@@ -1202,9 +1248,16 @@ def main():
                 result["success"] = True
                 result.update(report)
                 if args.checkpoint > 0 and success_count % args.checkpoint == 0:
-                    checkpoint_path = parquet_path + ".checkpoint" if parquet_path else None
+                    checkpoint_path = (
+                        parquet_path + ".checkpoint" if parquet_path else None
+                    )
                     logger.info(f"Saving checkpoint at {success_count} successful...")
-                    save_checkpoint(parquet_path, all_results, checkpoint_path, details_map=details_map)
+                    save_checkpoint(
+                        parquet_path,
+                        all_results,
+                        checkpoint_path,
+                        details_map=details_map,
+                    )
 
             all_results.append(result)
 
@@ -1223,7 +1276,9 @@ def main():
                 if result["success"]:
                     num_players = len(result.get("players", []))
                     retry_info = f" [Retry pass {pass_num + 1}]" if pass_num > 0 else ""
-                    http_retries = f" [{num_attempts} HTTP attempts]" if num_attempts > 1 else ""
+                    http_retries = (
+                        f" [{num_attempts} HTTP attempts]" if num_attempts > 1 else ""
+                    )
                     print(
                         f"[{total_processed}/{len(tournament_codes)}] ✓ {tournament_code}: {num_players} players{retry_info}{http_retries} | "
                         f"Actual: {actual_rate:.2f}/s | "
@@ -1234,7 +1289,9 @@ def main():
                     error_msg = result.get("error", "unknown")
                     will_retry = tournament_code in pass_failed
                     retry_info = f" [Retry pass {pass_num + 1}]" if pass_num > 0 else ""
-                    http_retries = f" [{num_attempts} HTTP attempts]" if num_attempts > 1 else ""
+                    http_retries = (
+                        f" [{num_attempts} HTTP attempts]" if num_attempts > 1 else ""
+                    )
                     retry_status = " [WILL RETRY]" if will_retry else " [FINAL FAILURE]"
                     print(
                         f"[{total_processed}/{len(tournament_codes)}] ✗ {tournament_code}: {error_msg}{retry_info}{http_retries}{retry_status} | "
@@ -1254,7 +1311,9 @@ def main():
                     postfix_dict["pass"] = f"{pass_num + 1}/{args.max_retries + 1}"
                 if len(pass_failed) > 0:
                     postfix_dict["pending"] = len(pass_failed)
-                postfix_dict["est"] = format_duration(est_remaining) if est_remaining > 0 else "?"
+                postfix_dict["est"] = (
+                    format_duration(est_remaining) if est_remaining > 0 else "?"
+                )
                 if pbar:
                     pbar.update(1)
                     pbar.set_postfix(postfix_dict)
@@ -1337,7 +1396,12 @@ def main():
             if len(codes) <= max_show:
                 logger.info("  Tournaments needing retries (in order): %s", codes)
             else:
-                logger.info("  Tournaments needing retries (first %d): %s ... and %d more", max_show, codes[:max_show], len(codes) - max_show)
+                logger.info(
+                    "  Tournaments needing retries (first %d): %s ... and %d more",
+                    max_show,
+                    codes[:max_show],
+                    len(codes) - max_show,
+                )
         if error_counts:
             logger.info("  Error breakdown: %s", dict(error_counts))
 
@@ -1354,11 +1418,20 @@ def main():
         logger.info("  Rate-limit wait: %.3fs", wait_avg)
         logger.info("  HTTP fetch:      %.3fs", fetch_avg)
         logger.info("  HTML parse:      %.3fs", parse_avg)
-        n_retries = sum(1 for p in profile_samples if p.get("_attempt_times") and len(p["_attempt_times"]) > 1)
+        n_retries = sum(
+            1
+            for p in profile_samples
+            if p.get("_attempt_times") and len(p["_attempt_times"]) > 1
+        )
         if n_retries > 0:
             sum_all = sum(sum(p.get("_attempt_times", [0])) for p in profile_samples)
             sum_fetch = sum(p.get("fetch_s", 0) for p in profile_samples)
-            logger.info("  Retries: %d/%d had >1 HTTP attempt (extra: %.2fs)", n_retries, n, sum_all - sum_fetch)
+            logger.info(
+                "  Retries: %d/%d had >1 HTTP attempt (extra: %.2fs)",
+                n_retries,
+                n,
+                sum_all - sum_fetch,
+            )
         logger.info("  Measured (wait+fetch+parse): %.3fs", measured_avg)
         if n_cycle > 0:
             cycle_avg = sum(p["cycle_s"] for p in samples_with_cycle) / n_cycle
@@ -1373,9 +1446,11 @@ def main():
                 other_min,
                 other_max,
             )
-            logger.info("  Check: measured + other = %.3fs (should ≈ cycle)", measured_avg + other_avg)
+            logger.info(
+                "  Check: measured + other = %.3fs (should ≈ cycle)",
+                measured_avg + other_avg,
+            )
 
 
 if __name__ == "__main__":
     main()
-
