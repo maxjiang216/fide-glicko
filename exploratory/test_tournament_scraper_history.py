@@ -195,7 +195,7 @@ def main():
         print()
     
     # Write detailed results to file
-    output_file = Path(__file__).parent / "tournament_scraper_history_test_results.txt"
+    output_file = Path(__file__).parent / "data" / "tournament_scraper_history_test_results.txt"
     with open(output_file, 'w') as f:
         f.write("Tournament Scraper Historical Test Results\n")
         f.write("=" * 80 + "\n")
