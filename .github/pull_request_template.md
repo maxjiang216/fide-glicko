@@ -1,1 +1,7 @@
-Use common sense. I generate PR descriptions by feeding `git diff --staged` to AI, ideally in the same chat I used for development so it has context beyond the code—motivation, empirical findings for design decisions, etc.
+## What changed
+(Brief summary if helpful—or just paste your diff below.)
+
+## Why
+(Motivation, context, whatever helps.)
+
+- [ ] Quick sanity check done
