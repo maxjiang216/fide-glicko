@@ -146,7 +146,6 @@ python src/scraper/get_tournaments.py --year 2025 --month 1 --quiet
 | `--checkpoint` | | `100` | Save checkpoint every N successful tournaments |
 | `--show-time` | | `False` | Show timing info for each tournament |
 | `--verbose` | | `False` | Use verbose stdout output instead of progress bar |
-| `--profile` | | `False` | Print timing breakdown (fetch vs parse) at end |
 | `--limit` | | `0` | Process only first N tournaments (for testing) |
 | `--verbose-errors` | | `False` | Log failed HTTP attempts and print retry analysis at end |
 
@@ -163,8 +162,8 @@ python src/scraper/get_tournament_details.py --input data/tournament_ids/custom.
 # Verbose mode with detailed error information
 python src/scraper/get_tournament_details.py --year 2025 --month 1 --verbose
 
-# Profiling and error analysis (for debugging rate limits)
-python src/scraper/get_tournament_details.py --year 2025 --month 1 --profile --verbose-errors --limit 20
+# Error analysis (for debugging rate limits)
+python src/scraper/get_tournament_details.py --year 2025 --month 1 --verbose-errors --limit 20
 
 # More frequent checkpoints
 python src/scraper/get_tournament_details.py --year 2025 --month 1 --checkpoint 50
@@ -185,14 +184,13 @@ python src/scraper/get_tournament_details.py --year 2025 --month 1 --checkpoint 
 | `--show-time` | | `False` | Show timing info for each tournament |
 | `--verbose` | | `False` | Use verbose stdout output instead of progress bar |
 | `--no-samples` | | `False` | Skip JSON and CSV sample outputs (Parquet only) |
-| `--profile` | | `False` | Print timing breakdown at end |
 | `--limit` | | `0` | Process only first N tournaments (for testing) |
 | `--verbose-errors` | | `False` | Log failed HTTP attempts and print retry analysis at end |
 
 **Examples:**
 
 ```bash
-# Scrape tournament reports for January 2025 (reads from tournament_details)
+# Scrape tournament reports for January 2025 (reads tournament IDs from get_tournaments output)
 python src/scraper/get_tournament_reports.py --year 2025 --month 1
 
 # Use custom input with details for date inference
@@ -343,8 +341,7 @@ Each tournament detail includes:
 - `pgn_file`: PGN file link
 - `orig_report`, `view_report_href`, `view_report_text`: Report links
 
-**Diagnostics (--profile, --verbose-errors):**
-- `--profile`: Prints timing breakdown (rate-limit wait, HTTP fetch, HTML parse, cycle time)
+**Diagnostics (--verbose-errors):**
 - `--verbose-errors`: Logs each failed HTTP attempt and prints summary: attempt distribution (how many need 1/2/3 attempts), list of tournaments needing retries, error breakdown by type
 
 **Note on List Fields:**
@@ -362,8 +359,9 @@ In the JSON sample files, these fields remain as proper JSON arrays.
 ### `get_tournament_reports.py`
 
 **Input/Output:**
-- Reads tournament codes from a file, or from tournament details Parquet when using `--year`/`--month` (extracts event_code from successful records)
-- Can use `--input` to specify a codes file; use `--details-path` with a details Parquet to load date bounds for round date inference
+- Reads tournament codes from a file, or from `data/tournament_ids/YYYY_MM` (output of `get_tournaments.py`) when using `--year`/`--month`
+- If `get_tournament_details` output exists (`data/tournament_details/YYYY_MM.parquet`), it is used only for start/end dates to improve date format inference
+- With `--input`, use `--details-path` to optionally supply a details Parquet for date inference
 - Outputs:
   - **Parquet file** (main): One row per game (tournament_code, round, date, white_id, black_id, white_score, forfeit). Games are deduplicated (each game appears once, from white player's perspective)
   - **JSON sample**: Random sample of player-round rows (verbose format with all fields)
@@ -390,7 +388,7 @@ In the JSON sample files, these fields remain as proper JSON arrays.
 
 **Date Inference:**
 - Round dates in reports use formats like `yy/mm/dd` or `dd/mm/yy`; the script infers format from date ranges
-- When `--details-path` is provided, uses tournament start/end dates from details to constrain inference
+- When tournament details Parquet is available (auto-detected for `--year`/`--month`, or via `--details-path` with `--input`), uses start/end dates to constrain inference for better accuracy
 - Output Parquet uses ISO dates (YYYY-MM-DD) for games
 
 **Game Data:**
