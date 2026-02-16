@@ -1059,7 +1059,9 @@ def main():
             sys.exit(1)
         try:
             tournament_codes = read_tournament_codes(ids_path)
-            logger.info(f"Loaded {len(tournament_codes)} tournament codes from {ids_path}")
+            logger.info(
+                f"Loaded {len(tournament_codes)} tournament codes from {ids_path}"
+            )
         except Exception as e:
             logger.error(f"Error reading tournament IDs: {e}")
             sys.exit(1)
