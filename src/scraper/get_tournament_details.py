@@ -123,7 +123,6 @@ def fetch_tournament_details(
     tournament_id: str,
     session: requests.Session,
     *,
-    _profile: Optional[Dict[str, float]] = None,
     _attempt_log: Optional[List[Dict]] = None,
 ) -> Tuple[Optional[Dict], Optional[str], int]:
     """
@@ -160,9 +159,6 @@ def fetch_tournament_details(
             finally:
                 elapsed = time.perf_counter() - t0
                 attempt_times.append(elapsed)
-                if _profile is not None:
-                    _profile.setdefault("_attempt_times", []).append(elapsed)
-            fetch_s = time.perf_counter() - t0
 
             if response.status_code != 200:
                 last_error = f"HTTP {response.status_code}"
@@ -177,14 +173,10 @@ def fetch_tournament_details(
                     )
                 continue
 
-            t1 = time.perf_counter()
             soup = BeautifulSoup(response.content, "html.parser")
 
             details_table = soup.find("table", class_="details_table")
             if not details_table:
-                if _profile is not None:
-                    _profile["fetch_s"] = fetch_s
-                    _profile["parse_s"] = time.perf_counter() - t1
                 return None, "no data found", len(attempt_times)
 
             details = {}
@@ -245,10 +237,6 @@ def fetch_tournament_details(
                     details["view_report_text"] = extract_text_from_cell(value_cell)
 
             # Remove empty fields
-            parse_s = time.perf_counter() - t1
-            if _profile is not None:
-                _profile["fetch_s"] = fetch_s
-                _profile["parse_s"] = parse_s
             return {k: v for k, v in details.items() if v}, None, len(attempt_times)
 
         except requests.exceptions.Timeout as e:
@@ -500,11 +488,6 @@ def main():
         help="Use verbose stdout output instead of progress bar (shows detailed error info)",
     )
     parser.add_argument(
-        "--profile",
-        action="store_true",
-        help="Print timing breakdown (fetch vs parse) at the end",
-    )
-    parser.add_argument(
         "--limit",
         type=int,
         default=0,
@@ -591,7 +574,6 @@ def main():
     total_retries = (
         0  # Total number of tournaments that have been retried at least once
     )
-    profile_samples: List[Dict[str, float]] = [] if args.profile else []
     attempt_log: List[Dict] = (
         [] if args.verbose_errors else []
     )  # Shared across all fetches
@@ -625,45 +607,17 @@ def main():
             total_retries += len(current_tournaments)
 
         pass_failed = []
-        last_cycle_start = None
 
         for tournament_id in current_tournaments:
-            now = time.perf_counter()
-            if args.profile and last_cycle_start is not None and profile_samples:
-                prev = profile_samples[-1]
-                cycle_s = now - last_cycle_start
-                prev["cycle_s"] = cycle_s
-                prev["other_s"] = (
-                    cycle_s
-                    - prev.get("wait_s", 0)
-                    - prev.get("fetch_s", 0)
-                    - prev.get("parse_s", 0)
-                )
-            last_cycle_start = now
-
-            t_wait = time.perf_counter()
             rate_limiter.wait()
-            wait_s = time.perf_counter() - t_wait
 
-            t_fetch_start = time.perf_counter() if args.profile else None
-            profile = {} if args.profile else None
             details, error, num_attempts = fetch_tournament_details(
                 tournament_id,
                 session,
-                _profile=profile,
                 _attempt_log=attempt_log if args.verbose_errors else None,
             )
             if args.verbose_errors:
                 attempt_counts.append((tournament_id, num_attempts))
-            fetch_total_s = (
-                (time.perf_counter() - t_fetch_start) if t_fetch_start else 0
-            )
-            if args.profile and profile:
-                profile["wait_s"] = wait_s
-                profile["fetch_total_s"] = fetch_total_s
-                profile_samples.append(profile)
-
-            t_post = time.perf_counter() if args.profile else None
 
             result = {"tournament_id": tournament_id}
 
@@ -696,19 +650,12 @@ def main():
                 result["details"] = details
 
                 # Checkpoint
-                t_before_checkpoint = time.perf_counter() if args.profile else None
                 if args.checkpoint > 0 and success_count % args.checkpoint == 0:
                     checkpoint_path = (
                         parquet_path + ".checkpoint" if parquet_path else None
                     )
                     logger.info(f"Saving checkpoint at {success_count} successful...")
                     save_checkpoint(parquet_path, all_results, checkpoint_path)
-                if args.profile and profile_samples:
-                    profile_samples[-1]["checkpoint_s"] = (
-                        time.perf_counter() - t_before_checkpoint
-                        if t_before_checkpoint
-                        else 0
-                    )
             all_results.append(result)
 
             total_processed = success_count + error_count
@@ -775,12 +722,9 @@ def main():
                 )
 
                 # Update progress bar
-                t_before_pbar = time.perf_counter() if args.profile else None
                 if pbar:
                     pbar.update(1)
                     pbar.set_postfix(postfix_dict)
-                if args.profile and profile_samples and t_before_pbar:
-                    profile_samples[-1]["pbar_s"] = time.perf_counter() - t_before_pbar
 
                 if args.show_time:
                     rate = rate_limiter.get_rate()
@@ -799,7 +743,6 @@ def main():
                         )
 
             # Periodic progress update (only in non-verbose mode or at milestones)
-            t_before_periodic = time.perf_counter() if args.profile else None
             if not args.verbose and (
                 total_processed % 50 == 0 or total_processed == len(tournament_ids)
             ):
@@ -811,16 +754,6 @@ def main():
                     f"Actual: {actual_rate:.2f}/s | Target: {target_rate:.2f}/s | "
                     f"Elapsed: {format_duration(elapsed)} | Est: {format_duration(est_remaining)}"
                 )
-            if (
-                args.profile
-                and profile_samples
-                and t_post is not None
-                and t_before_periodic is not None
-            ):
-                pf = time.perf_counter() - t_post
-                pl = time.perf_counter() - t_before_periodic
-                profile_samples[-1]["post_fetch_s"] = pf
-                profile_samples[-1]["periodic_log_s"] = pl
 
         current_tournaments = pass_failed
 
@@ -878,83 +811,6 @@ def main():
                 )
         if error_counts:
             logger.info("  Error breakdown: %s", dict(error_counts))
-
-    # Profile timing breakdown
-    if profile_samples:
-        n = len(profile_samples)
-        samples_with_cycle = [p for p in profile_samples if "cycle_s" in p]
-        n_cycle = len(samples_with_cycle)
-        wait_avg = sum(p["wait_s"] for p in profile_samples) / n
-        fetch_avg = sum(p["fetch_s"] for p in profile_samples) / n
-        parse_avg = sum(p["parse_s"] for p in profile_samples) / n
-        measured_avg = wait_avg + fetch_avg + parse_avg
-        logger.info("\nProfile (avg per tournament, n=%d):", n)
-        logger.info("  Rate-limit wait: %.3fs", wait_avg)
-        logger.info("  HTTP fetch:      %.3fs", fetch_avg)
-        logger.info("  HTML parse:      %.3fs", parse_avg)
-        fetch_total_avg = sum(p.get("fetch_total_s", 0) for p in profile_samples) / n
-        logger.info("  fetch_total (wall): %.3fs", fetch_total_avg)
-        n_retries = sum(
-            1
-            for p in profile_samples
-            if p.get("_attempt_times") and len(p["_attempt_times"]) > 1
-        )
-        sum_all_attempts = sum(
-            sum(p.get("_attempt_times", [0])) for p in profile_samples
-        )
-        sum_fetch_only = sum(p.get("fetch_s", 0) for p in profile_samples)
-        extra_from_retries = sum_all_attempts - sum_fetch_only
-        logger.info(
-            "  Retries: %d/%d had >1 HTTP attempt (failed attempts + backoff = %.2fs total extra)",
-            n_retries,
-            n,
-            extra_from_retries,
-        )
-        logger.info("  Measured (wait+fetch+parse): %.3fs", measured_avg)
-        if n_cycle > 0:
-            cycle_avg = sum(p["cycle_s"] for p in samples_with_cycle) / n_cycle
-            other_avg = sum(p["other_s"] for p in samples_with_cycle) / n_cycle
-            other_min = min(p["other_s"] for p in samples_with_cycle)
-            other_max = max(p["other_s"] for p in samples_with_cycle)
-            logger.info("  ---")
-            logger.info("  Cycle (wall time per item, n=%d): %.3fs", n_cycle, cycle_avg)
-            logger.info(
-                "  Other (cycle - measured): %.3fs (min=%.3fs max=%.3fs)",
-                other_avg,
-                other_min,
-                other_max,
-            )
-            logger.info(
-                "  Check: measured + other = %.3fs (should ≈ cycle)",
-                measured_avg + other_avg,
-            )
-            n_with_pf = sum(1 for p in profile_samples if "post_fetch_s" in p)
-            if n_with_pf > 0:
-                post_vals = [
-                    p["post_fetch_s"] for p in profile_samples if "post_fetch_s" in p
-                ]
-                post_avg = sum(post_vals) / len(post_vals)
-                post_min, post_max = min(post_vals), max(post_vals)
-                ckpt_avg = sum(p.get("checkpoint_s", 0) for p in profile_samples) / n
-                pbar_avg = sum(p.get("pbar_s", 0) for p in profile_samples) / n
-                periodic_avg = (
-                    sum(p.get("periodic_log_s", 0) for p in profile_samples) / n
-                )
-                logger.info(
-                    "  --- Breakdown of Other (n_with_post_fetch=%d):", n_with_pf
-                )
-                logger.info(
-                    "    post_fetch (to loop end): %.4fs (min=%.4fs max=%.4fs)",
-                    post_avg,
-                    post_min,
-                    post_max,
-                )
-                logger.info(
-                    "    checkpoint: %.4fs | pbar: %.4fs | periodic_log: %.4fs",
-                    ckpt_avg,
-                    pbar_avg,
-                    periodic_avg,
-                )
 
 
 if __name__ == "__main__":

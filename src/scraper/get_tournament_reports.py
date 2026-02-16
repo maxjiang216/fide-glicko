@@ -330,7 +330,6 @@ def fetch_tournament_report(
     tournament_code: str,
     session: requests.Session,
     *,
-    _profile: Optional[Dict[str, float]] = None,
     _attempt_log: Optional[List[Dict]] = None,
 ) -> Tuple[Optional[Dict], Optional[str], int]:
     """
@@ -368,9 +367,6 @@ def fetch_tournament_report(
             finally:
                 elapsed = time.perf_counter() - t0
                 attempt_times.append(elapsed)
-                if _profile is not None:
-                    _profile.setdefault("_attempt_times", []).append(elapsed)
-            fetch_s = time.perf_counter() - t0
 
             if response.status_code != 200:
                 last_error = f"HTTP {response.status_code}"
@@ -385,15 +381,11 @@ def fetch_tournament_report(
                     )
                 continue
 
-            t1 = time.perf_counter()
             soup = BeautifulSoup(response.content, "html.parser")
 
             # Find the main results table
             table = soup.find("table", class_="calc_table")
             if not table:
-                if _profile is not None:
-                    _profile["fetch_s"] = fetch_s
-                    _profile["parse_s"] = time.perf_counter() - t1
                 return None, "no data found", len(attempt_times)
 
             rows = table.find_all("tr")
@@ -547,15 +539,8 @@ def fetch_tournament_report(
                 i += 1
 
             if not players:
-                if _profile is not None:
-                    _profile["fetch_s"] = fetch_s
-                    _profile["parse_s"] = time.perf_counter() - t1
                 return None, "no players found", len(attempt_times)
 
-            parse_s = time.perf_counter() - t1
-            if _profile is not None:
-                _profile["fetch_s"] = fetch_s
-                _profile["parse_s"] = parse_s
             return (
                 {"tournament_code": tournament_code, "players": players},
                 None,
@@ -1003,17 +988,12 @@ def main():
         "--details-path",
         type=str,
         default="",
-        help="Path to tournament_details parquet (for date inference when using --input)",
+        help="Path to tournament_details parquet (for date inference; optional, improves round date format accuracy)",
     )
     parser.add_argument(
         "--no-samples",
         action="store_true",
         help="Skip JSON and CSV sample outputs (parquet only)",
-    )
-    parser.add_argument(
-        "--profile",
-        action="store_true",
-        help="Print timing breakdown (fetch vs parse) at the end",
     )
     parser.add_argument(
         "--limit",
@@ -1059,23 +1039,38 @@ def main():
         if args.month < 1 or args.month > 12:
             logger.error("Error: month must be 1-12")
             sys.exit(1)
-        # Read from tournament_details (preferred) or fall back to tournament_ids
-        details_path = os.path.join(
-            args.data_dir, "tournament_details", f"{args.year}_{args.month:02d}.parquet"
-        )
+        # Primary source: tournament IDs from get_tournaments.py
         ids_path = os.path.join(
             args.data_dir, "tournament_ids", f"{args.year}_{args.month:02d}"
         )
+        details_path = (
+            args.details_path
+            if args.details_path
+            else os.path.join(
+                args.data_dir,
+                "tournament_details",
+                f"{args.year}_{args.month:02d}.parquet",
+            )
+        )
+        if not os.path.exists(ids_path):
+            logger.error(f"Error: tournament IDs file not found: {ids_path}")
+            logger.error("Run get_tournaments.py first for --year/--month")
+            logger.error("Alternatively use --input with a codes file")
+            sys.exit(1)
+        try:
+            tournament_codes = read_tournament_codes(ids_path)
+            logger.info(
+                f"Loaded {len(tournament_codes)} tournament codes from {ids_path}"
+            )
+        except Exception as e:
+            logger.error(f"Error reading tournament IDs: {e}")
+            sys.exit(1)
+        # Optionally load tournament_details for date inference (start/end) when available
         if os.path.exists(details_path):
-            # Extract event codes and build details_map for date inference
             try:
                 df = pd.read_parquet(details_path)
                 if "event_code" in df.columns:
                     success_df = df[df["success"] == True]
-                    tournament_codes = (
-                        success_df["event_code"].dropna().astype(str).tolist()
-                    )
-                    tournament_codes = [code for code in tournament_codes if code]
                     for _, row in success_df.iterrows():
                         ec = row.get("event_code")
                         if pd.notna(ec) and str(ec):
@@ -1086,33 +1081,14 @@ def main():
                             details_map[str(ec)] = (sd, ed)
                     if details_map:
                         logger.info(
-                            f"Loaded date bounds for {len(details_map)} tournaments from details"
+                            f"Loaded date bounds for {len(details_map)} tournaments from {details_path} (for date format inference)"
                         )
                 else:
-                    logger.error(
-                        f"Error: event_code column not found in {details_path}"
+                    logger.warning(
+                        f"event_code column not found in {details_path}, skipping date inference"
                     )
-                    sys.exit(1)
             except Exception as e:
-                logger.error(f"Error reading tournament details: {e}")
-                sys.exit(1)
-        elif os.path.exists(ids_path):
-            # Fallback: use tournament_ids when details not yet run (for quick testing)
-            try:
-                tournament_codes = read_tournament_codes(ids_path)
-                logger.info(
-                    f"Using tournament_ids from {ids_path} (details not run - date inference from round dates only)"
-                )
-            except Exception as e:
-                logger.error(f"Error reading tournament IDs: {e}")
-                sys.exit(1)
-        else:
-            logger.error(f"Error: tournament details file not found: {details_path}")
-            logger.error(
-                "Run get_tournament_details.py first, or get_tournaments.py (faster) for --year/--month testing"
-            )
-            logger.error("Alternatively use --input with a codes file")
-            sys.exit(1)
+                logger.warning(f"Could not load details for date inference: {e}")
     else:
         logger.error("Error: specify --input or --year and --month")
         sys.exit(1)
@@ -1169,7 +1145,6 @@ def main():
     success_count = 0
     error_count = 0
     total_retries = 0
-    profile_samples: List[Dict[str, float]] = [] if args.profile else []
     attempt_log: List[Dict] = [] if args.verbose_errors else []
     attempt_counts: List[Tuple[str, int]] = [] if args.verbose_errors else []
     current_tournaments = tournament_codes
@@ -1195,34 +1170,15 @@ def main():
             total_retries += len(current_tournaments)
 
         pass_failed = []
-        last_cycle_start = None
 
         for tournament_code in current_tournaments:
-            now = time.perf_counter()
-            if args.profile and last_cycle_start is not None and profile_samples:
-                prev = profile_samples[-1]
-                cycle_s = now - last_cycle_start
-                prev["cycle_s"] = cycle_s
-                prev["other_s"] = (
-                    cycle_s
-                    - prev.get("wait_s", 0)
-                    - prev.get("fetch_s", 0)
-                    - prev.get("parse_s", 0)
-                )
-            last_cycle_start = now
-
-            profile = {} if args.profile else None
             report, error, num_attempts = fetch_tournament_report(
                 tournament_code,
                 session,
-                _profile=profile,
                 _attempt_log=attempt_log if args.verbose_errors else None,
             )
             if args.verbose_errors:
                 attempt_counts.append((tournament_code, num_attempts))
-            if args.profile and profile:
-                profile.setdefault("wait_s", 0)
-                profile_samples.append(profile)
 
             result = {"tournament_code": tournament_code}
 
@@ -1404,52 +1360,6 @@ def main():
                 )
         if error_counts:
             logger.info("  Error breakdown: %s", dict(error_counts))
-
-    # Profile timing breakdown
-    if profile_samples:
-        n = len(profile_samples)
-        samples_with_cycle = [p for p in profile_samples if "cycle_s" in p]
-        n_cycle = len(samples_with_cycle)
-        wait_avg = sum(p.get("wait_s", 0) for p in profile_samples) / n
-        fetch_avg = sum(p.get("fetch_s", 0) for p in profile_samples) / n
-        parse_avg = sum(p.get("parse_s", 0) for p in profile_samples) / n
-        measured_avg = wait_avg + fetch_avg + parse_avg
-        logger.info("\nProfile (avg per tournament, n=%d):", n)
-        logger.info("  Rate-limit wait: %.3fs", wait_avg)
-        logger.info("  HTTP fetch:      %.3fs", fetch_avg)
-        logger.info("  HTML parse:      %.3fs", parse_avg)
-        n_retries = sum(
-            1
-            for p in profile_samples
-            if p.get("_attempt_times") and len(p["_attempt_times"]) > 1
-        )
-        if n_retries > 0:
-            sum_all = sum(sum(p.get("_attempt_times", [0])) for p in profile_samples)
-            sum_fetch = sum(p.get("fetch_s", 0) for p in profile_samples)
-            logger.info(
-                "  Retries: %d/%d had >1 HTTP attempt (extra: %.2fs)",
-                n_retries,
-                n,
-                sum_all - sum_fetch,
-            )
-        logger.info("  Measured (wait+fetch+parse): %.3fs", measured_avg)
-        if n_cycle > 0:
-            cycle_avg = sum(p["cycle_s"] for p in samples_with_cycle) / n_cycle
-            other_avg = sum(p["other_s"] for p in samples_with_cycle) / n_cycle
-            other_min = min(p["other_s"] for p in samples_with_cycle)
-            other_max = max(p["other_s"] for p in samples_with_cycle)
-            logger.info("  ---")
-            logger.info("  Cycle (wall time per item, n=%d): %.3fs", n_cycle, cycle_avg)
-            logger.info(
-                "  Other (cycle - measured): %.3fs (min=%.3fs max=%.3fs)",
-                other_avg,
-                other_min,
-                other_max,
-            )
-            logger.info(
-                "  Check: measured + other = %.3fs (should ≈ cycle)",
-                measured_avg + other_avg,
-            )
 
 
 if __name__ == "__main__":

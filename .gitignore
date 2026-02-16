@@ -39,6 +39,10 @@ uv.lock
 .DS_Store
 Thumbs.db
 
+# Go
+go.sum
+go.mod
+
 # Project specific
 *.log
 .pytest_cache/
