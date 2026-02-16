@@ -1,7 +1,5 @@
 ## What changed
-(Brief summary if helpful—or just paste your diff below.)
+Summary of the changes. Tip: feed `git diff --staged` to an AI if you want help writing this.
 
 ## Why
-(Motivation, context, whatever helps.)
-
-- [ ] Quick sanity check done
+Motivation, design decisions, empirical findings, etc.—anything that'd be useful beyond what someone (or an AI) could infer from the code alone.
