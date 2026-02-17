@@ -41,9 +41,15 @@ pytest -m online
 
 ## What Gets Tested
 
+### `test_get_player_list.py`
+- **Unit**: `parse_xml_content` parses valid/invalid players, normalizes title (g→GM) and fed (uppercase), skips rows with invalid id
+- **Fixture**: XML snippets for single/multiple players; `process_zip` extracts XML from zip and parses
+- **Live**: Download URL returns valid zip with `.xml`; full pipeline returns >100k players with expected structure; field validity (byear in range, title in allowed set, sex M/F, fed in federation list)
+
 ### `test_get_federations.py`
 - **Unit / fixture**: None (federations list comes from live HTML)
-- **Live**: Federation list returns ~207 items with `code` and `name`; endpoint returns non-empty data with expected structure
+- **Live**: Federation list returns 208 items (207 scraped + CGO fallback) with `code` and `name`; endpoint returns non-empty data with expected structure
+- **Live** `test_cgo_in_federations`: Smoke test that CGO (Republic of Congo) is present—it is hard-coded when missing from FIDE's country selector; alerts if CGO is unavailable
 
 ### `test_get_tournaments.py`
 - **Live**: USA Dec 2025 returns a known count of tournaments; endpoint returns non-empty list with `Tournament` objects (id, name, location, time_control, dates, federation)

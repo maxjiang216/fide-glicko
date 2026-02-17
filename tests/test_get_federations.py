@@ -20,11 +20,22 @@ class TestGetFederations:
         federations = get_federations_with_retries()
 
         assert (
-            len(federations) == 207
-        ), f"Expected 207 federations, got {len(federations)}"
+            len(federations) == 208
+        ), f"Expected 208 federations (207 scraped + CGO fallback), got {len(federations)}"
         assert all("code" in f and "name" in f for f in federations)
         assert federations[0]["code"]  # Non-empty codes
         assert federations[0]["name"]  # Non-empty names
+
+    @pytest.mark.online
+    def test_cgo_in_federations(self):
+        """
+        CGO (Republic of Congo) is hard-coded in get_federations when missing
+        from FIDE's country selector. Ensures CGO is available for player list validation.
+        Run with: pytest -m online
+        """
+        federations = get_federations_with_retries()
+        codes = {f["code"].upper() for f in federations}
+        assert "CGO" in codes, "CGO (Republic of Congo) should be in federations"
 
     @pytest.mark.online
     def test_live_endpoint_returns_non_empty_with_expected_format(self):

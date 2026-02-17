@@ -49,6 +49,12 @@ def get_federations_with_retries(
                 if value and value.lower() != "all":
                     federations.append({"code": value, "name": name})
 
+            # CGO (Republic of Congo) not on FIDE country selector; add if missing
+            codes = {f["code"].upper() for f in federations}
+            if "CGO" not in codes:
+                federations.append({"code": "CGO", "name": "Republic of the Congo"})
+                federations.sort(key=lambda f: f["code"])
+
             return federations
         except (requests.RequestException, RuntimeError) as e:
             if attempt < max_retries - 1:

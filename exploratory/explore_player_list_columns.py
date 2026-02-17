@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """
-Inspect exact column positions in FIDE players_list TXT format.
+Inspect exact column positions in FIDE players_list TXT format (legacy).
 
-Prints character-by-character analysis to refine the fixed-width parser.
+The main scraper now uses XML. This script is for debugging/inspecting
+the TXT format if needed.
 """
 
 import sys

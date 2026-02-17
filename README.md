@@ -55,17 +55,22 @@ The project includes Python scripts for scraping tournament data from the FIDE w
    uv run src/scraper/get_federations.py
    ```
 
-2. **Get tournament IDs for a month:**
+2. **Get player list** (FIDE Combined Rating List: id, name, fed, title, etc.):
+   ```bash
+   uv run src/scraper/get_player_list.py
+   ```
+
+3. **Get tournament IDs for a month:**
    ```bash
    uv run src/scraper/get_tournaments.py --year 2025 --month 12
    ```
 
-3. **Get detailed tournament information:**
+4. **Get detailed tournament information:**
    ```bash
    uv run src/scraper/get_tournament_details.py --year 2025 --month 12
    ```
 
-4. **Get tournament reports (games) — run after details:**
+5. **Get tournament reports (games) — run after details:**
    ```bash
    uv run src/scraper/get_tournament_reports.py --year 2025 --month 12
    ```
