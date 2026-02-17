@@ -14,7 +14,7 @@ tournament_code = "393912"
 print(f"Testing tournament code: {tournament_code}")
 
 session = requests.Session()
-report, error = fetch_tournament_report(tournament_code, session)
+report, error, _ = fetch_tournament_report(tournament_code, session)
 
 if error:
     print(f"Error: {error}")
