@@ -3,13 +3,15 @@
 Download and process the FIDE Combined Rating List (STD, BLZ, RPD) from
 https://ratings.fide.com/download_lists.phtml
 
-Downloads the TXT format zip, parses the fixed-width file, and saves to parquet
-with a JSON sample.
+Downloads the XML format zip, parses it, and saves to parquet with a JSON sample.
+XML avoids fixed-width ambiguity (e.g. OTIT overflow in TXT).
 """
 
 import argparse
+import datetime
 import json
 import time
+import xml.etree.ElementTree as ET
 import zipfile
 from io import BytesIO
 from pathlib import Path
@@ -18,43 +20,24 @@ from typing import Any
 import pandas as pd
 import requests
 
-# Combined list STD, BLZ, RPD - TXT format
-DOWNLOAD_URL = "https://ratings.fide.com/download/players_list.zip"
+# Combined list STD, BLZ, RPD - XML format
+DOWNLOAD_URL = "https://ratings.fide.com/download/players_list_xml.zip"
 
-# Fixed-width column positions (start, end) - 0-based, end exclusive
-# Based on header: ID Number Name Fed Sex Tit WTit OTit FOA SRtng SGm SK RRtng RGm Rk BRtng BGm BK B-day Flag
-COLUMN_SPEC = [
-    ("id", 0, 15),  # ID NUMBER - FIDE identification number
-    ("name", 15, 76),  # NAME - player name
-    ("fed", 76, 79),  # FED - federation code
-    ("sex", 80, 84),  # SEX - M/F
-    ("tit", 84, 89),  # TIT/TITL - title (g, wg, m, wm, f, wf, c, wc)
-    ("wtit", 89, 94),  # Woman title
-    ("otit", 94, 109),  # OTIT - other titles (IA, FA, NA, IO, FT, etc.)
-    ("foa", 109, 113),  # FOA - FIDE Online Arena rating
-    ("srtng", 113, 119),  # STD/SRTNG - standard rating
-    ("sgm", 119, 123),  # SGM - standard rated games
-    ("sk", 123, 126),  # SK - standard K factor
-    ("rrtng", 126, 132),  # RPD/RRTNG - rapid rating
-    ("rgm", 132, 136),  # RGM - rapid rated games
-    ("rk", 136, 139),  # RK - rapid K factor
-    ("brtng", 139, 145),  # BLZ/BRTNG - blitz rating
-    ("bgm", 145, 149),  # BGM - blitz rated games
-    ("bk", 149, 152),  # BK - blitz K factor
-    ("bday", 152, 156),  # B-day/BORN - year of birth
-    ("flag", 156, 162),  # FLAG - I, WI, w (inactivity, woman)
-]
+# Title normalization: single-letter -> full code
+TITLE_MAP = {
+    "g": "GM",
+    "wg": "WGM",
+    "m": "IM",
+    "wm": "WIM",
+    "f": "FM",
+    "wf": "WFM",
+    "c": "CM",
+    "wc": "WCM",
+}
 
 
-def parse_line(line: str) -> dict[str, str] | None:
-    """Parse a single fixed-width line into a dict. Returns None for header/invalid."""
-    line = line.rstrip("\r\n")
-    if len(line) < 100:
-        return None
-    # Skip header line
-    if line.startswith("ID Number") or not line[0].isdigit():
-        return None
-    return {name: line[a:b].strip() for name, a, b in COLUMN_SPEC}
+def _elem_text(elem: ET.Element | None, default: str = "") -> str:
+    return (elem.text or "").strip() if elem is not None else default
 
 
 def _safe_int(value: str | None, allow_zero: bool = True) -> int | None:
@@ -67,30 +50,50 @@ def _safe_int(value: str | None, allow_zero: bool = True) -> int | None:
         return None
 
 
-# Output fields only (ID, Name, B-day, SEX, FED, TIT)
-OUTPUT_FIELDS = ("id", "name", "byear", "sex", "fed", "title")
+def _sanitize_byear(value: int | None) -> int | None:
+    """Return byear if in valid range (1900..current_year), else None."""
+    if value is None:
+        return None
+    current_year = datetime.datetime.now().year
+    if 1900 <= value < current_year:
+        return value
+    return None
 
 
-def parse_txt_content(content: str) -> list[dict[str, Any]]:
-    """Parse the full TXT content into a list of player dicts."""
+def parse_xml_content(xml_bytes: bytes) -> list[dict[str, Any]]:
+    """Parse XML into list of player dicts: id, name, byear, sex, fed, title."""
+    root = ET.fromstring(xml_bytes)
+    current_year = datetime.datetime.now().year
     rows: list[dict[str, Any]] = []
-    for line in content.splitlines():
-        parsed = parse_line(line)
-        if parsed is None:
-            continue
-        id_val = _safe_int(parsed.get("id"))
-        if id_val is None:
-            continue  # Skip rows with invalid id (e.g. org/alternate records)
 
-        row: dict[str, Any] = {
-            "id": id_val,
-            "name": parsed.get("name") or None,
-            "byear": _safe_int(parsed.get("bday"), allow_zero=False),
-            "sex": parsed.get("sex") or None,
-            "fed": parsed.get("fed") or None,
-            "title": parsed.get("tit") or None,
-        }
-        rows.append(row)
+    for player in root.findall("player"):
+        fideid = _safe_int(_elem_text(player.find("fideid")))
+        if fideid is None:
+            continue
+
+        byear_raw = _safe_int(_elem_text(player.find("birthday")), allow_zero=False)
+        byear = _sanitize_byear(byear_raw)
+
+        title = _elem_text(player.find("title"))
+        if title:
+            tit_lo = title.lower()
+            title = TITLE_MAP.get(tit_lo, title)
+
+        fed = _elem_text(player.find("country"))
+        if fed:
+            fed = fed.upper()
+
+        rows.append(
+            {
+                "id": fideid,
+                "name": _elem_text(player.find("name")) or None,
+                "byear": byear,
+                "sex": _elem_text(player.find("sex")) or None,
+                "fed": fed,
+                "title": title or None,
+            }
+        )
+
     return rows
 
 
@@ -100,7 +103,7 @@ def download_player_list(
     session: requests.Session | None = None,
 ) -> bytes:
     """
-    Download the FIDE players_list.zip with retry logic.
+    Download the FIDE players_list_xml.zip with retry logic.
 
     Returns:
         Raw bytes of the zip file.
@@ -120,13 +123,13 @@ def download_player_list(
 
 
 def process_zip(zip_bytes: bytes) -> list[dict[str, Any]]:
-    """Extract and parse the TXT from the zip. Returns list of player dicts."""
+    """Extract and parse the XML from the zip. Returns list of player dicts."""
     with zipfile.ZipFile(BytesIO(zip_bytes), "r") as zf:
         names = zf.namelist()
-        txt_name = next((n for n in names if n.endswith(".txt")), names[0])
-        with zf.open(txt_name) as f:
-            content = f.read().decode("utf-8", errors="replace")
-    return parse_txt_content(content)
+        xml_name = next((n for n in names if n.endswith(".xml")), names[0])
+        with zf.open(xml_name) as f:
+            xml_content = f.read()
+    return parse_xml_content(xml_content)
 
 
 def get_player_list(

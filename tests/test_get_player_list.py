@@ -7,8 +7,7 @@ import pytest
 
 from get_player_list import (
     DOWNLOAD_URL,
-    parse_line,
-    parse_txt_content,
+    parse_xml_content,
     process_zip,
     get_player_list,
     download_player_list,
@@ -18,148 +17,109 @@ from get_player_list import (
 class TestParsePlayerList:
     """Tests for parsing logic using fixtures."""
 
-    def test_parse_line_skips_header(self):
-        """Header line returns None."""
-        assert parse_line("ID Number      Name ...") is None
-
-    def test_parse_line_parses_valid_data_line(self):
-        """Valid data line is parsed correctly."""
-        # Fixed-width: name 15:76 (61 chars), fed 76:79, gap at 79, sex 80:84, etc.
-        line = (
-            "10292519       "
-            + "A A M Imtiaz, Chowdhury".ljust(61)
-            + "BAN"
-            + " "
-            + "M".ljust(4)
-            + "".ljust(5)
-            + "".ljust(5)
-            + "".ljust(15)
-            + "0".ljust(4)
-            + "0".ljust(6)
-            + "0".ljust(4)
-            + "0".ljust(3)
-            + "0".ljust(6)
-            + "0".ljust(4)
-            + "0".ljust(3)
-            + "0".ljust(6)
-            + "0".ljust(4)
-            + "0".ljust(3)
-            + "1975"
-            + "".ljust(6)
-        )
-        parsed = parse_line(line)
-        assert parsed is not None
-        assert parsed["id"] == "10292519"
-        assert parsed["name"] == "A A M Imtiaz, Chowdhury"
-        assert parsed["fed"] == "BAN"
-        assert parsed["sex"] == "M"
-        assert parsed["bday"] == "1975"
-
-    def test_parse_line_skips_short_lines(self):
-        """Lines shorter than 100 chars return None."""
-        assert parse_line("short") is None
-
-    def test_parse_txt_content_processes_multiple_lines(self):
-        """parse_txt_content returns list of dicts with correct types."""
-        line1 = (
-            "10292519       "
-            + "A A M Imtiaz, Chowdhury".ljust(61)
-            + "BAN"
-            + " "
-            + "M".ljust(4)
-            + "".ljust(5)
-            + "".ljust(5)
-            + "".ljust(15)
-            + "0".ljust(4)
-            + "0".ljust(6)
-            + "0".ljust(4)
-            + "0".ljust(3)
-            + "0".ljust(6)
-            + "0".ljust(4)
-            + "0".ljust(3)
-            + "0".ljust(6)
-            + "0".ljust(4)
-            + "0".ljust(3)
-            + "1975"
-            + "".ljust(6)
-        )
-        line2 = (
-            "537001345      "
-            + "A Arbhin Vanniarajan".ljust(61)
-            + "IND"
-            + " "
-            + "M".ljust(4)
-            + "".ljust(5)
-            + "".ljust(5)
-            + "".ljust(15)
-            + "0".ljust(4)  # tit, wtit, otit, foa
-            + "1464".ljust(6)
-            + "0".ljust(4)
-            + "0".ljust(3)  # srtng, sgm, sk
-            + "0".ljust(6)
-            + "0".ljust(4)
-            + "0".ljust(3)  # rrtng, rgm, rk
-            + "0".ljust(6)
-            + "0".ljust(4)
-            + "0".ljust(3)  # brtng, bgm, bk
-            + "2010"
-            + "".ljust(6)  # bday, flag
-        )
-        content = (
-            "ID Number      Name                                                         Fed Sex Tit  WTit OTit           FOA SRtng SGm SK RRtng RGm Rk BRtng BGm BK B-day Flag\n"
-            + line1
-            + "\n"
-            + line2
-            + "\n"
-        )
-        players = parse_txt_content(content)
-        assert len(players) == 2
+    def test_parse_xml_content_parses_valid_player(self):
+        """Valid player element is parsed correctly."""
+        xml = b"""<?xml version="1.0"?>
+<playerslist>
+<player>
+<fideid>10292519</fideid>
+<name>A A M Imtiaz, Chowdhury</name>
+<country>BAN</country>
+<sex>M</sex>
+<title></title>
+<w_title></w_title>
+<o_title></o_title>
+<foa_title></foa_title>
+<rating>0</rating>
+<games>0</games>
+<k>0</k>
+<rapid_rating>0</rapid_rating>
+<rapid_games>0</rapid_games>
+<rapid_k>0</rapid_k>
+<blitz_rating>0</blitz_rating>
+<blitz_games>0</blitz_games>
+<blitz_k>0</blitz_k>
+<birthday>1975</birthday>
+<flag></flag>
+</player>
+</playerslist>"""
+        players = parse_xml_content(xml)
+        assert len(players) == 1
         assert players[0]["id"] == 10292519
         assert players[0]["name"] == "A A M Imtiaz, Chowdhury"
         assert players[0]["fed"] == "BAN"
+        assert players[0]["sex"] == "M"
         assert players[0]["byear"] == 1975
+
+    def test_parse_xml_content_normalizes_title_and_fed(self):
+        """Title (g->GM) and fed (uppercase) are normalized."""
+        xml = b"""<?xml version="1.0"?>
+<playerslist>
+<player>
+<fideid>10292519</fideid>
+<name>Test Player</name>
+<country>usa</country>
+<sex>M</sex>
+<title>g</title>
+<birthday>1990</birthday>
+</player>
+</playerslist>"""
+        players = parse_xml_content(xml)
+        assert len(players) == 1
+        assert players[0]["fed"] == "USA"
+        assert players[0]["title"] == "GM"
+
+    def test_parse_xml_content_skips_invalid_id(self):
+        """Players with invalid fideid are skipped."""
+        xml = b"""<?xml version="1.0"?>
+<playerslist>
+<player>
+<fideid></fideid>
+<name>No ID</name>
+<country>USA</country>
+<birthday>1990</birthday>
+</player>
+</playerslist>"""
+        players = parse_xml_content(xml)
+        assert len(players) == 0
+
+    def test_parse_xml_content_processes_multiple_players(self):
+        """Multiple players are parsed with correct types."""
+        xml = b"""<?xml version="1.0"?>
+<playerslist>
+<player><fideid>10292519</fideid><name>Player One</name><country>BAN</country><sex>M</sex><birthday>1975</birthday></player>
+<player><fideid>537001345</fideid><name>A Arbhin Vanniarajan</name><country>IND</country><sex>M</sex><birthday>2010</birthday></player>
+</playerslist>"""
+        players = parse_xml_content(xml)
+        assert len(players) == 2
+        assert players[0]["id"] == 10292519
+        assert players[0]["byear"] == 1975
+        assert players[1]["id"] == 537001345
         assert players[1]["byear"] == 2010
 
     def test_process_zip_extracts_and_parses(self):
-        """process_zip extracts TXT from zip and parses."""
-        # Fixed-width line matching COLUMN_SPEC (162 chars, gap between fed and sex)
-        data_line = (
-            "10292519       "  # id 0:15
-            + "Test Player".ljust(61)  # name 15:76
-            + "USA"
-            + " "  # fed 76:79, gap 79
-            + "M".ljust(4)  # sex 80:84
-            + "g".ljust(5)
-            + "".ljust(5)  # tit 84:89, wtit 89:94
-            + "".ljust(15)
-            + "".ljust(4)  # otit 94:109, foa 109:113
-            + "2800".ljust(6)
-            + "50".ljust(4)
-            + "40".ljust(3)  # srtng, sgm, sk
-            + "2700".ljust(6)
-            + "30".ljust(4)
-            + "40".ljust(3)  # rrtng, rgm, rk
-            + "2650".ljust(6)
-            + "20".ljust(4)
-            + "40".ljust(3)  # brtng, bgm, bk
-            + "1990".ljust(4)  # bday 152:156
-            + "".ljust(6)  # flag 156:162
-            + "\n"
-        )
-        content = (
-            b"ID Number      Name                                                         Fed Sex Tit  WTit OTit           FOA SRtng SGm SK RRtng RGm Rk BRtng BGm BK B-day Flag\n"
-            + data_line.encode("utf-8")
-        )
+        """process_zip extracts XML from zip and parses."""
+        xml_content = b"""<?xml version="1.0"?>
+<playerslist>
+<player>
+<fideid>10292519</fideid>
+<name>Test Player</name>
+<country>USA</country>
+<sex>M</sex>
+<title>g</title>
+<birthday>1990</birthday>
+</player>
+</playerslist>"""
         buf = BytesIO()
         with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
-            zf.writestr("players_list_foa.txt", content)
+            zf.writestr("players_list_xml_foa.xml", xml_content)
 
         players = process_zip(buf.getvalue())
         assert len(players) == 1
         assert players[0]["id"] == 10292519
         assert players[0]["name"] == "Test Player"
         assert players[0]["fed"] == "USA"
-        assert players[0]["title"] == "g"
+        assert players[0]["title"] == "GM"
         assert players[0]["byear"] == 1990
 
 
@@ -169,15 +129,15 @@ class TestGetPlayerListOnline:
     @pytest.mark.online
     def test_download_url_returns_zip(self):
         """
-        Smoke test: FIDE download URL returns valid zip with expected content.
+        Smoke test: FIDE download URL returns valid zip with XML content.
         https://ratings.fide.com/download_lists.phtml
         Run with: pytest -m online
         """
         zip_bytes = download_player_list()
-        assert len(zip_bytes) > 1_000_000  # ~40 MB
+        assert len(zip_bytes) > 1_000_000  # ~45 MB
         with zipfile.ZipFile(BytesIO(zip_bytes), "r") as zf:
             names = zf.namelist()
-            assert any(n.endswith(".txt") for n in names)
+            assert any(n.endswith(".xml") for n in names)
 
     @pytest.mark.online
     def test_get_player_list_returns_non_empty_with_expected_format(self):
@@ -194,3 +154,56 @@ class TestGetPlayerListOnline:
         assert p["name"]
         assert len(p["fed"]) <= 3
         assert p["sex"] in ("M", "F", None)
+
+    @pytest.mark.online
+    def test_player_list_field_validity(self):
+        """
+        Validate field constraints on downloaded player list.
+        Run with: pytest -m online
+        """
+        players = get_player_list()
+        assert len(players) > 0
+
+        current_year = __import__("datetime").datetime.now().year
+        VALID_TITLES = frozenset(
+            {"g", "wg", "m", "wm", "f", "wf", "c", "wc"}
+            | {"gm", "im", "fm", "cm", "wgm", "wim", "wfm", "wcm"}
+        )
+
+        for p in players:
+            assert isinstance(p["id"], int), f"Invalid id: {p['id']!r}"
+
+            if p.get("byear") is not None:
+                assert (
+                    1900 <= p["byear"] < current_year
+                ), f"byear out of range: {p['byear']} for id={p['id']}"
+
+            if p.get("title"):
+                assert (
+                    p["title"].lower() in VALID_TITLES
+                ), f"Invalid title: {p['title']!r} for id={p['id']}"
+
+            if p.get("sex") is not None:
+                assert p["sex"] in (
+                    "M",
+                    "F",
+                ), f"Invalid sex: {p['sex']!r} for id={p['id']}"
+
+    @pytest.mark.online
+    def test_player_list_fed_codes_in_federations(self):
+        """
+        Every fed code in the player list must be a valid FIDE federation code.
+        Run with: pytest -m online
+        """
+        from get_federations import get_federations_with_retries
+
+        federations = get_federations_with_retries()
+        valid_codes = frozenset(c.upper() for c in (f["code"] for f in federations))
+        special_codes = frozenset({"FID", "NON"})
+        valid_codes = valid_codes | special_codes
+
+        players = get_player_list()
+        unique_feds = {p["fed"].upper() for p in players if p.get("fed")}
+
+        invalid = unique_feds - valid_codes
+        assert not invalid, f"FED codes not in FIDE federation list: {invalid}"
