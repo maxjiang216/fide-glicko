@@ -5,6 +5,7 @@ Fast FIDE tournament scraper using direct AJAX calls.
 This script fetches tournament lists for all federations using direct HTTP
 requests to the JSON endpoints, which is much faster than using a headless browser.
 """
+
 import argparse
 import asyncio
 import csv
