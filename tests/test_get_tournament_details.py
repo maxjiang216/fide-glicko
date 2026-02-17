@@ -37,13 +37,13 @@ class TestFixtureBasedParsing:
         assert details.get("end_date") == "2024-04-23"
         assert "Chief Arbiter" in str(details) or "chief_arbiter" in details
 
-    @pytest.mark.live
+    @pytest.mark.online
     def test_live_fetch_matches_fixture(self):
         """
         Smoke test: fetching live from FIDE gives same parsed result as fixture.
         https://ratings.fide.com/tournament_information.phtml?event=368261
-        Run with: pytest -m live
-        Skip in CI: pytest -m "not live"
+        Run with: pytest -m online
+        Skip in CI: pytest -m "not online"
         """
         # Parse fixture
         fixture_path = Path(__file__).parent / "fixtures" / "candidates_24_details.html"
@@ -74,3 +74,23 @@ class TestFixtureBasedParsing:
             "Live fetch produced different result than fixture. "
             "FIDE may have updated the page—consider refreshing the fixture."
         )
+
+    @pytest.mark.online
+    def test_live_endpoint_returns_non_empty_with_expected_format(self):
+        """
+        Endpoint check: tournament details returns non-empty data with expected structure.
+        Run with: pytest -m online
+        """
+        session = requests.Session()
+        details, error, _ = fetch_tournament_details("368261", session)
+
+        assert error is None, f"Fetch failed: {error}"
+        assert details is not None
+        assert len(details) > 0
+
+        required = {"event_code", "tournament_name", "city", "country"}
+        assert required <= set(details.keys()), f"Missing keys: {required - set(details.keys())}"
+        assert details["event_code"] == "368261"
+        assert details["tournament_name"]
+        assert details["city"]
+        assert details["country"]

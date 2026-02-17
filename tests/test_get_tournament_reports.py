@@ -450,12 +450,12 @@ class TestFixtureBasedParsing:
                 g["black_id"] not in high_rated_ids
             ), f"High-rated player {g['black_id']} should not have a game in round {g['round']} (bye)"
 
-    @pytest.mark.live
+    @pytest.mark.online
     def test_live_fetch_matches_fixture(self):
         """
         Smoke test: fetching live from FIDE gives same parsed result as fixture.
-        Run with: pytest -m live
-        Skip in CI: pytest -m "not live"
+        Run with: pytest -m online
+        Skip in CI: pytest -m "not online"
         """
         # Parse fixture
         fixture_path = Path(__file__).parent / "fixtures" / "world_cup_25_report.html"
@@ -486,3 +486,25 @@ class TestFixtureBasedParsing:
             "Live fetch produced different result than fixture. "
             "FIDE may have updated the page—consider refreshing the fixture."
         )
+
+    @pytest.mark.online
+    def test_live_endpoint_returns_non_empty_with_expected_format(self):
+        """
+        Endpoint check: tournament report returns non-empty data with expected structure.
+        Run with: pytest -m online
+        """
+        live_session = requests.Session()
+        report, error, _ = fetch_tournament_report("449502", live_session)
+
+        assert error is None, f"Fetch failed: {error}"
+        assert report is not None
+        assert report["tournament_code"] == "449502"
+        assert "players" in report
+        assert len(report["players"]) > 0
+
+        player = report["players"][0]
+        required = {"id", "name", "country", "rating", "total", "rounds"}
+        assert required <= set(player.keys()), f"Missing keys: {required - set(player.keys())}"
+        assert player["id"]
+        assert player["name"]
+        assert player["total"] is not None

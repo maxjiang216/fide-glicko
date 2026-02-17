@@ -16,6 +16,6 @@ dependencies = [
 
 [tool.pytest.ini_options]
 markers = [
-    "live: mark test as requiring network (deselect with -m 'not live')",
+    "online: mark test as requiring network (deselect with -m 'not online')",
 ]
 testpaths = ["tests"]

@@ -73,6 +73,22 @@ The project includes Python scripts for scraping tournament data from the FIDE w
 
 The scraper outputs data in efficient Parquet format with JSON samples for quick inspection. See the [scraper README](src/scraper/README.md) for complete documentation.
 
+## Testing
+
+Run unit tests (offline, no network):
+
+```bash
+uv run pytest -m "not online"
+```
+
+Run all tests including online endpoint checks:
+
+```bash
+uv run pytest -m online
+```
+
+See [tests/README.md](tests/README.md) for detailed documentation on running tests and what they cover.
+
 ## License
 
 MIT License
