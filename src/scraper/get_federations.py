@@ -2,6 +2,7 @@
 """
 Scrape FIDE website to get the list of federations.
 """
+
 import argparse
 import csv
 import time

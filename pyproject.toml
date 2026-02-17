@@ -14,6 +14,15 @@ dependencies = [
     "pandas>=2.0.0",
 ]
 
+[project.optional-dependencies]
+dev = [
+    "black>=24.0.0",
+]
+
+[tool.black]
+target-version = ["py313"]
+extend-exclude = "exploratory"
+
 [tool.pytest.ini_options]
 markers = [
     "online: mark test as requiring network (deselect with -m 'not online')",
