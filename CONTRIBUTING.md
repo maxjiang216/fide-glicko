@@ -8,13 +8,7 @@ See the [README](README.md) for installation and usage instructions.
 
 ## Branch Protection
 
-Direct commits to `main`/`master` are disabled. All changes must go through a pull request from a feature branch. Required status checks (CI tests) must pass before merging. To enable this:
-
-1. Go to **Settings → Branches** in your GitHub repo
-2. Add a branch protection rule for `main` (or `master`)
-3. Enable **Require a pull request before merging**
-4. Enable **Require status checks to pass before merging** and add the `test` job
-5. Optionally enable **Do not allow bypassing the above settings**
+Direct commits to `main`/`master` are disabled. All changes must go through a pull request from a feature branch.
 
 ## Questions or Ideas?
 
