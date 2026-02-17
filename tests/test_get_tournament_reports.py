@@ -504,7 +504,9 @@ class TestFixtureBasedParsing:
 
         player = report["players"][0]
         required = {"id", "name", "country", "rating", "total", "rounds"}
-        assert required <= set(player.keys()), f"Missing keys: {required - set(player.keys())}"
+        assert required <= set(
+            player.keys()
+        ), f"Missing keys: {required - set(player.keys())}"
         assert player["id"]
         assert player["name"]
         assert player["total"] is not None

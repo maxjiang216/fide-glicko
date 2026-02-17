@@ -89,7 +89,9 @@ class TestFixtureBasedParsing:
         assert len(details) > 0
 
         required = {"event_code", "tournament_name", "city", "country"}
-        assert required <= set(details.keys()), f"Missing keys: {required - set(details.keys())}"
+        assert required <= set(
+            details.keys()
+        ), f"Missing keys: {required - set(details.keys())}"
         assert details["event_code"] == "368261"
         assert details["tournament_name"]
         assert details["city"]

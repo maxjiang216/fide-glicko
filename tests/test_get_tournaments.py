@@ -42,6 +42,7 @@ class TestGetTournaments:
         Endpoint check: tournament list returns non-empty data with expected structure.
         Run with: pytest -m online
         """
+
         async def _fetch():
             semaphore = asyncio.Semaphore(1)
             async with aiohttp.ClientSession() as session:
