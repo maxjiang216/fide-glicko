@@ -115,6 +115,7 @@ class TestParseDetailsDateToIso:
     def test_accepts_datetime_and_timestamp(self):
         from datetime import datetime
         import pandas as pd
+
         dt = datetime(2024, 12, 30)
         assert parse_details_date_to_iso(dt) == "2024-12-30"
         ts = pd.Timestamp("2024-01-15")
@@ -435,7 +436,9 @@ class TestFixtureBasedParsing:
         assert len(rounds) >= 1
         # All rounds in output must have opp_id (forfeit-without-opponent are skipped)
         for r in rounds:
-            assert r.get("opp_id"), "All rounds must have opponent (forfeit-without-opponent skipped)"
+            assert r.get(
+                "opp_id"
+            ), "All rounds must have opponent (forfeit-without-opponent skipped)"
 
         # Round 3+ have real games (opp_id present, score/forfeit from actual play)
         game_rounds = [r for r in rounds if r.get("opp_id") and r.get("forfeit") == ""]
@@ -451,7 +454,9 @@ class TestFixtureBasedParsing:
         Tournament 418871 (Blitz Playoff): forfeit rounds with no opponent (empty href)
         must NOT produce games. Only rounds with opp_id produce games.
         """
-        fixture_path = Path(__file__).parent / "fixtures" / "blitz_playoff_418871_report.html"
+        fixture_path = (
+            Path(__file__).parent / "fixtures" / "blitz_playoff_418871_report.html"
+        )
         fixture_html = fixture_path.read_bytes()
 
         mock_response = MagicMock()
@@ -483,7 +488,9 @@ class TestFixtureBasedParsing:
         Tournament 397341 (World Blitz): Niemann-Dubov round 10 forfeit WITH opponent
         must produce a game with forfeit=True. Niemann had Forfeit (+) (won), Dubov had Forfeit (-).
         """
-        fixture_path = Path(__file__).parent / "fixtures" / "world_blitz_397341_report.html"
+        fixture_path = (
+            Path(__file__).parent / "fixtures" / "world_blitz_397341_report.html"
+        )
         fixture_html = fixture_path.read_bytes()
 
         mock_response = MagicMock()

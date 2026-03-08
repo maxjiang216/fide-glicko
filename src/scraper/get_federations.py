@@ -72,7 +72,9 @@ def get_federations_with_retries(
                 # Normalize to uppercase for validation
                 code = value.upper() if len(value) == 3 else value
                 if not is_valid_federation_code(code):
-                    logger.warning(f"Invalid federation code skipped: {value!r} ({name})")
+                    logger.warning(
+                        f"Invalid federation code skipped: {value!r} ({name})"
+                    )
                     continue
                 federations.append({"code": code, "name": name})
 

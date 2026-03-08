@@ -162,10 +162,14 @@ def main() -> int:
     tournaments_cmd = [
         sys.executable,
         str(SCRAPER_DIR / "get_tournaments.py"),
-        "--year", str(args.year),
-        "--month", str(args.month),
-        "--federations", f"{data_dir}/federations.csv",
-        "--output", f"{data_dir}/tournament_ids/{month_key}",
+        "--year",
+        str(args.year),
+        "--month",
+        str(args.month),
+        "--federations",
+        f"{data_dir}/federations.csv",
+        "--output",
+        f"{data_dir}/tournament_ids/{month_key}",
     ] + common_quiet
     if limit_tournaments > 0:
         tournaments_cmd.extend(["--limit", str(limit_tournaments)])
@@ -176,9 +180,12 @@ def main() -> int:
     details_cmd = [
         sys.executable,
         str(SCRAPER_DIR / "get_tournament_details.py"),
-        "--year", str(args.year),
-        "--month", str(args.month),
-        "--data-dir", data_dir,
+        "--year",
+        str(args.year),
+        "--month",
+        str(args.month),
+        "--data-dir",
+        data_dir,
     ]
     if limit_details > 0:
         details_cmd.extend(["--limit", str(limit_details)])
@@ -200,9 +207,12 @@ def main() -> int:
     reports_cmd = [
         sys.executable,
         str(SCRAPER_DIR / "get_tournament_reports.py"),
-        "--year", str(args.year),
-        "--month", str(args.month),
-        "--data-dir", data_dir,
+        "--year",
+        str(args.year),
+        "--month",
+        str(args.month),
+        "--data-dir",
+        data_dir,
     ]
     if limit_reports > 0:
         reports_cmd.extend(["--limit", str(limit_reports)])
@@ -218,9 +228,12 @@ def main() -> int:
         validate_cmd = [
             sys.executable,
             str(SCRIPTS_DIR.parent / "exploratory" / "validate_pipeline.py"),
-            "--year", str(args.year),
-            "--month", str(args.month),
-            "--data-dir", data_dir,
+            "--year",
+            str(args.year),
+            "--month",
+            str(args.month),
+            "--data-dir",
+            data_dir,
         ]
         if args.quiet:
             validate_cmd.append("--quiet")

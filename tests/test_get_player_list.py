@@ -218,13 +218,13 @@ class TestGetPlayerListOnline:
                 ), f"byear out of range: {p['byear']} for id={p['id']}"
 
             if p.get("title"):
-                assert p["title"] in OPEN_TITLES, (
-                    f"Invalid title (open only): {p['title']!r} for id={p['id']}"
-                )
+                assert (
+                    p["title"] in OPEN_TITLES
+                ), f"Invalid title (open only): {p['title']!r} for id={p['id']}"
             if p.get("w_title"):
-                assert p["w_title"] in WOMEN_TITLES, (
-                    f"Invalid w_title (women only): {p['w_title']!r} for id={p['id']}"
-                )
+                assert (
+                    p["w_title"] in WOMEN_TITLES
+                ), f"Invalid w_title (women only): {p['w_title']!r} for id={p['id']}"
 
             if p.get("sex") is not None:
                 assert p["sex"] in (

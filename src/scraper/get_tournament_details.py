@@ -370,7 +370,17 @@ def flatten_result(result: Dict) -> Dict:
     details = result.get("details", {})
     if details:
         # Simple string fields
-        for field in ["id", "name", "city", "fed", "system", "hybrid", "category", "type", "zone"]:
+        for field in [
+            "id",
+            "name",
+            "city",
+            "fed",
+            "system",
+            "hybrid",
+            "category",
+            "type",
+            "zone",
+        ]:
             flattened[field] = details.get(field, "")
 
         # n_players: int, None if invalid
@@ -389,7 +399,9 @@ def flatten_result(result: Dict) -> Dict:
             flattened[field] = parsed
 
         # nat_championship: bool (true if non-null)
-        flattened["nat_championship"] = parse_nat_championship(details.get("nat_championship", ""))
+        flattened["nat_championship"] = parse_nat_championship(
+            details.get("nat_championship", "")
+        )
 
     return flattened
 
@@ -408,7 +420,10 @@ def build_report(results: List[Dict]) -> Dict:
     successful = [r for r in results if r.get("success", False)]
     df_success = results_to_dataframe(successful) if successful else pd.DataFrame()
 
-    report: Dict = {"tournaments_total": len(results), "tournaments_success": len(successful)}
+    report: Dict = {
+        "tournaments_total": len(results),
+        "tournaments_success": len(successful),
+    }
 
     if df_success.empty:
         report["nulls_by_column"] = {}
@@ -421,7 +436,11 @@ def build_report(results: List[Dict]) -> Dict:
     for col in df_success.columns:
         if col in ("tournament_id", "success", "error"):
             continue
-        nulls[col] = int((df_success[col].isna() | (df_success[col].astype(str).str.strip() == "")).sum())
+        nulls[col] = int(
+            (
+                df_success[col].isna() | (df_success[col].astype(str).str.strip() == "")
+            ).sum()
+        )
     report["nulls_by_column"] = nulls
 
     # Distribution for system, hybrid, category, type, zone
@@ -477,7 +496,9 @@ def save_time_control_unique_values(results: List[Dict], output_path: str):
             for r in successful
             if r.get("details", {}).get("time_control")
         ]
-        unique = sorted(set(v.strip() for v in raw_values if v and str(v).strip()), key=str)
+        unique = sorted(
+            set(v.strip() for v in raw_values if v and str(v).strip()), key=str
+        )
         dirname = os.path.dirname(output_path)
         if dirname:
             os.makedirs(dirname, exist_ok=True)
@@ -545,16 +566,31 @@ def build_and_save_report(
 
     df = results_to_dataframe(successful)
     detail_cols = [
-        "id", "name", "city", "fed", "n_players", "system", "hybrid",
-        "category", "start_date", "end_date", "date_received", "date_registered",
-        "type", "time_control", "zone", "nat_championship",
+        "id",
+        "name",
+        "city",
+        "fed",
+        "n_players",
+        "system",
+        "hybrid",
+        "category",
+        "start_date",
+        "end_date",
+        "date_received",
+        "date_registered",
+        "type",
+        "time_control",
+        "zone",
+        "nat_championship",
     ]
     cols = [c for c in detail_cols if c in df.columns]
 
     nulls_by_column = {}
     for c in cols:
         if c in df.columns:
-            nulls_by_column[c] = int((df[c].isna() | (df[c].astype(str).str.strip() == "")).sum())
+            nulls_by_column[c] = int(
+                (df[c].isna() | (df[c].astype(str).str.strip() == "")).sum()
+            )
 
     dist_cols = ["system", "hybrid", "category", "type", "zone"]
     distributions = {}
@@ -562,7 +598,9 @@ def build_and_save_report(
         if c in df.columns:
             counts = df[c].value_counts()
             distributions[c] = {
-                "unique_values": sorted(counts.index.dropna().astype(str).unique().tolist()),
+                "unique_values": sorted(
+                    counts.index.dropna().astype(str).unique().tolist()
+                ),
                 "distribution": {str(k): int(v) for k, v in counts.items()},
             }
 
@@ -572,7 +610,9 @@ def build_and_save_report(
         for r in successful
         if r.get("details", {}).get("time_control")
     ]
-    tc_defaulted = [(raw, tid) for raw, tid in tc_defaulted if raw and parse_time_control(raw)[1]]
+    tc_defaulted = [
+        (raw, tid) for raw, tid in tc_defaulted if raw and parse_time_control(raw)[1]
+    ]
     tc_defaulted_sample = [
         {"tournament_id": tid, "raw_value": raw}
         for raw, tid in (tc_defaulted[:10] if len(tc_defaulted) > 10 else tc_defaulted)
@@ -587,7 +627,9 @@ def build_and_save_report(
             n_players_odd.append((raw, r.get("tournament_id", "")))
     n_players_odd_sample = [
         {"tournament_id": tid, "raw_value": raw}
-        for raw, tid in (n_players_odd[:10] if len(n_players_odd) > 10 else n_players_odd)
+        for raw, tid in (
+            n_players_odd[:10] if len(n_players_odd) > 10 else n_players_odd
+        )
     ]
 
     # nat_championship raw distribution
@@ -613,7 +655,11 @@ def build_and_save_report(
         "nat_championship_raw_distribution": nat_championship_distribution,
     }
 
-    base = parquet_path.replace(".parquet", "") if parquet_path.endswith(".parquet") else parquet_path
+    base = (
+        parquet_path.replace(".parquet", "")
+        if parquet_path.endswith(".parquet")
+        else parquet_path
+    )
     report_path = base + "_report.json"
     time_control_path = base + "_time_control_unique_values.txt"
 
@@ -634,7 +680,9 @@ def build_and_save_report(
     unique_tc = sorted(set(v.strip() for v in raw_tc if v and str(v).strip()), key=str)
     with open(time_control_path, "w", encoding="utf-8") as f:
         f.write("\n".join(unique_tc))
-    logger.info(f"Saved {len(unique_tc)} unique raw time_control values to {time_control_path}")
+    logger.info(
+        f"Saved {len(unique_tc)} unique raw time_control values to {time_control_path}"
+    )
 
 
 def save_checkpoint(
@@ -960,9 +1008,7 @@ def main():
                 if args.show_time:
                     rate = rate_limiter.get_rate()
                     if result["success"]:
-                        name = result.get("details", {}).get(
-                            "name", "unknown"
-                        )
+                        name = result.get("details", {}).get("name", "unknown")
                         logger.info(
                             f"[{total_processed}/{len(tournament_ids)}] ✓ {tournament_id}: {name} | "
                             f"Rate: {rate:.2f}/s | Est: {format_duration(est_remaining)}"

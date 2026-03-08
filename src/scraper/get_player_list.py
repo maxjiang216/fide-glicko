@@ -145,7 +145,9 @@ def parse_xml_content(xml_bytes: bytes) -> tuple[list[dict[str, Any]], dict[str,
         pair = (title_normalized or "", w_title_raw or "")
         title_w_title_pair_counter[pair] += 1
         title_w_title_to_ids.setdefault(pair, []).append(fideid)
-        non_empty_count = sum(1 for v in (title_normalized, w_title_raw, o_title_raw) if v)
+        non_empty_count = sum(
+            1 for v in (title_normalized, w_title_raw, o_title_raw) if v
+        )
         if non_empty_count >= 2:
             players_with_multiple_titles += 1
 
@@ -202,9 +204,11 @@ def parse_xml_content(xml_bytes: bytes) -> tuple[list[dict[str, Any]], dict[str,
                 "title": t,
                 "w_title": w,
                 "count": c,
-                "sample_fide_id": random.choice(title_w_title_to_ids[(t, w)])
-                if title_w_title_to_ids.get((t, w))
-                else None,
+                "sample_fide_id": (
+                    random.choice(title_w_title_to_ids[(t, w)])
+                    if title_w_title_to_ids.get((t, w))
+                    else None
+                ),
             }
             for (t, w), c in title_w_title_pair_counter.most_common()
         ],
@@ -243,7 +247,9 @@ def process_zip(zip_bytes: bytes) -> list[dict[str, Any]]:
     return players
 
 
-def _process_zip_internal(zip_bytes: bytes) -> tuple[list[dict[str, Any]], dict[str, Any], bytes]:
+def _process_zip_internal(
+    zip_bytes: bytes,
+) -> tuple[list[dict[str, Any]], dict[str, Any], bytes]:
     """Extract and parse the XML. Returns (players, parse_stats, xml_content)."""
     with zipfile.ZipFile(BytesIO(zip_bytes), "r") as zf:
         names = zf.namelist()
@@ -316,7 +322,9 @@ def build_report(
 
     odd_name_data: list[tuple[int, Any]] = []  # (fide_id, name)
     odd_sex_data: list[tuple[int, str]] = []  # (fide_id, sex)
-    odd_fed_by_code: dict[str, tuple[int, str]] = {}  # fed -> (fide_id, fed), one per fed, exclude FIDE
+    odd_fed_by_code: dict[str, tuple[int, str]] = (
+        {}
+    )  # fed -> (fide_id, fed), one per fed, exclude FIDE
     odd_title_data: list[tuple[int, str]] = []  # (fide_id, title)
     odd_w_title_data: list[tuple[int, str]] = []  # (fide_id, w_title)
     byear_null_ids: list[int] = []
@@ -355,7 +363,12 @@ def build_report(
             odd_sex_data.append((fide_id, sex))
 
         fed = p.get("fed")
-        if fed and fed.upper() != "FIDE" and valid_feds and fed.upper() not in valid_feds:
+        if (
+            fed
+            and fed.upper() != "FIDE"
+            and valid_feds
+            and fed.upper() not in valid_feds
+        ):
             odd["fed"] += 1
             if fed.upper() not in odd_fed_by_code:
                 odd_fed_by_code[fed.upper()] = (fide_id, fed)
@@ -394,9 +407,7 @@ def build_report(
     for col in ("id", "name", "byear", "sex", "fed", "title", "w_title"):
         nulls.setdefault(col, 0)
 
-    def _sample_pairs(
-        data: list[tuple[int, Any]], n: int
-    ) -> list[dict[str, Any]]:
+    def _sample_pairs(data: list[tuple[int, Any]], n: int) -> list[dict[str, Any]]:
         """Sample up to n (fide_id, value) pairs, return as [{"fide_id": x, "value": y}]."""
         if not data:
             return []
@@ -404,7 +415,10 @@ def build_report(
             sampled = data
         else:
             sampled = random.sample(data, n)
-        return [{"fide_id": fid, "value": val} for fid, val in sorted(sampled, key=lambda x: x[0])]
+        return [
+            {"fide_id": fid, "value": val}
+            for fid, val in sorted(sampled, key=lambda x: x[0])
+        ]
 
     def _sample_ids(ids: list[int], n: int) -> list[int]:
         if len(ids) <= n:
@@ -460,11 +474,14 @@ def build_report(
         "byear_null_sample_fide_ids": _sample_ids(byear_null_ids, SAMPLE_SIZE),
         "non_standard_federations": non_standard_feds_sorted,
         "non_standard_federations_sample": (
-            [{"fide_id": fid, "value": fed} for fid, fed in (
-                list(odd_fed_by_code.values())
-                if len(odd_fed_by_code) <= SAMPLE_SIZE
-                else random.sample(list(odd_fed_by_code.values()), SAMPLE_SIZE)
-            )]
+            [
+                {"fide_id": fid, "value": fed}
+                for fid, fed in (
+                    list(odd_fed_by_code.values())
+                    if len(odd_fed_by_code) <= SAMPLE_SIZE
+                    else random.sample(list(odd_fed_by_code.values()), SAMPLE_SIZE)
+                )
+            ]
             if odd_fed_by_code
             else None
         ),
@@ -494,8 +511,12 @@ def build_report(
                 "players_with_multiple_titles", 0
             ),
             "consolidation": parse_stats.get("title_consolidation", ""),
-            "title_w_title_unique_pairs": parse_stats.get("title_w_title_unique_pairs", []),
-            "title_w_title_distribution": parse_stats.get("title_w_title_distribution", []),
+            "title_w_title_unique_pairs": parse_stats.get(
+                "title_w_title_unique_pairs", []
+            ),
+            "title_w_title_distribution": parse_stats.get(
+                "title_w_title_distribution", []
+            ),
         },
     }
     return report
@@ -555,8 +576,14 @@ def main() -> int:
     parquet_path = output_dir / "players_list.parquet"
     json_sample_path = output_dir / "players_list_sample.json"
     xml_path = output_dir / "players_list.xml"
-    report_path = Path(args.report) if args.report else output_dir / "players_list_report.json"
-    federations_path = Path(args.federations) if args.federations else repo_root / "data" / "federations.csv"
+    report_path = (
+        Path(args.report) if args.report else output_dir / "players_list_report.json"
+    )
+    federations_path = (
+        Path(args.federations)
+        if args.federations
+        else repo_root / "data" / "federations.csv"
+    )
 
     if parquet_path.exists() and not args.override:
         logger.info("File %s already exists. Use --override to replace.", parquet_path)

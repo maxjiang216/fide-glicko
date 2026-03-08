@@ -99,7 +99,11 @@ def read_federations(federations_path: Path) -> List[Tuple[str, str]]:
     federations = []
     with open(federations_path, "r", encoding="utf-8") as f:
         reader = csv.DictReader(f)
-        if reader.fieldnames is None or "code" not in reader.fieldnames or "name" not in reader.fieldnames:
+        if (
+            reader.fieldnames is None
+            or "code" not in reader.fieldnames
+            or "name" not in reader.fieldnames
+        ):
             raise ValueError("CSV file must contain 'code' and 'name' columns")
         for row in reader:
             code = (row.get("code") or "").strip()
