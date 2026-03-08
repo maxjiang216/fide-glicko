@@ -14,6 +14,7 @@ import random
 import sys
 import time
 from collections import Counter
+from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
@@ -119,6 +120,60 @@ def extract_link_href(cell) -> str:
     return ""
 
 
+def parse_time_control(raw: str) -> tuple[str, bool]:
+    """
+    Parse time_control to S (standard), R (rapid), or B (blitz).
+    First word (case-insensitive): blitz->B, rapid->R, standard->S.
+    Otherwise default to S and return (S, True) to indicate it was defaulted.
+    Returns (code, was_defaulted).
+    """
+    if not raw or not str(raw).strip():
+        return "S", False
+    first = str(raw).strip().split()[0].lower() if str(raw).strip().split() else ""
+    if first == "blitz":
+        return "B", False
+    if first == "rapid":
+        return "R", False
+    if first == "standard":
+        return "S", False
+    return "S", True
+
+
+def parse_n_players(raw: str) -> tuple[Optional[int], bool]:
+    """
+    Parse n_players to int. Valid if positive and > 2.
+    Returns (value_or_none, is_valid).
+    """
+    if not raw or not str(raw).strip():
+        return None, False
+    try:
+        n = int(str(raw).strip())
+        return n, n > 2
+    except (ValueError, TypeError):
+        return None, False
+
+
+def parse_date(raw: str) -> Optional[datetime]:
+    """Parse date string to datetime. Returns None if unparseable."""
+    if not raw or not str(raw).strip():
+        return None
+    s = str(raw).strip()
+    for fmt in ("%Y-%m-%d", "%d.%m.%Y", "%d/%m/%Y", "%Y/%m/%d"):
+        try:
+            return datetime.strptime(s, fmt)
+        except ValueError:
+            continue
+    try:
+        return pd.to_datetime(s)
+    except Exception:
+        return None
+
+
+def parse_nat_championship(raw: str) -> bool:
+    """True if non-null/non-empty, False otherwise."""
+    return bool(raw and str(raw).strip())
+
+
 def fetch_tournament_details(
     tournament_id: str,
     session: requests.Session,
@@ -194,11 +249,11 @@ def fetch_tournament_details(
 
                 # Map labels to JSON field names
                 field_map = {
-                    "Event code": "event_code",
-                    "Tournament Name": "tournament_name",
+                    "Event code": "id",
+                    "Tournament Name": "name",
                     "City": "city",
-                    "Country": "country",
-                    "Number of players": "number_of_players",
+                    "Country": "fed",
+                    "Number of players": "n_players",
                     "System": "system",
                     "Hybrid": "hybrid",
                     "Category": "category",
@@ -209,32 +264,11 @@ def fetch_tournament_details(
                     "Type": "type",
                     "Time Control": "time_control",
                     "Zone": "zone",
-                    "Reported mult. round days": "reported_mult_round_days",
                     "Nat. Championship": "nat_championship",
-                    "PGN file": "pgn_file",
                 }
 
                 if label in field_map:
                     details[field_map[label]] = value
-                elif label == "Chief Arbiter":
-                    details["chief_arbiter"] = extract_links_from_cell(value_cell)
-                elif label == "Deputy Chief Arbiter":
-                    details["deputy_chief_arbiter"] = extract_links_from_cell(
-                        value_cell
-                    )
-                elif label == "Arbiter":
-                    details["arbiter"] = extract_links_from_cell(value_cell)
-                elif label == "Assistant Arbiter":
-                    details["assistant_arbiter"] = extract_links_from_cell(value_cell)
-                elif label == "Chief Organizer":
-                    details["chief_organizer"] = extract_links_from_cell(value_cell)
-                elif label == "Organizer":
-                    details["organizer"] = extract_links_from_cell(value_cell)
-                elif label == "Orig.Report":
-                    details["orig_report"] = extract_link_href(value_cell)
-                elif label == "View Report":
-                    details["view_report_href"] = extract_link_href(value_cell)
-                    details["view_report_text"] = extract_text_from_cell(value_cell)
 
             # Remove empty fields
             return {k: v for k, v in details.items() if v}, None, len(attempt_times)
@@ -322,56 +356,36 @@ def fetch_tournament_details(
 
 
 def flatten_result(result: Dict) -> Dict:
-    """Flatten a result dictionary for Parquet storage."""
+    """Flatten a result dictionary for Parquet storage with processed fields."""
     flattened = {
         "tournament_id": result.get("tournament_id", ""),
         "success": result.get("success", False),
         "error": result.get("error", ""),
     }
 
-    # Flatten details if present
     details = result.get("details", {})
     if details:
-        # Simple fields
-        for field in [
-            "event_code",
-            "tournament_name",
-            "city",
-            "country",
-            "number_of_players",
-            "system",
-            "hybrid",
-            "category",
-            "start_date",
-            "end_date",
-            "date_received",
-            "date_registered",
-            "type",
-            "time_control",
-            "zone",
-            "reported_mult_round_days",
-            "nat_championship",
-            "pgn_file",
-            "orig_report",
-            "view_report_href",
-            "view_report_text",
-        ]:
+        # Simple string fields
+        for field in ["id", "name", "city", "fed", "system", "hybrid", "category", "type", "zone"]:
             flattened[field] = details.get(field, "")
 
-        # List fields - join with semicolon for storage
-        for field in [
-            "chief_arbiter",
-            "deputy_chief_arbiter",
-            "arbiter",
-            "assistant_arbiter",
-            "chief_organizer",
-            "organizer",
-        ]:
-            value = details.get(field, [])
-            if isinstance(value, list):
-                flattened[field] = ";".join(str(v) for v in value)
-            else:
-                flattened[field] = ""
+        # n_players: int, None if invalid
+        n_players_val, _ = parse_n_players(details.get("n_players", ""))
+        flattened["n_players"] = n_players_val
+
+        # time_control: S/R/B from first word
+        tc_raw = details.get("time_control", "")
+        tc_code, _ = parse_time_control(tc_raw)
+        flattened["time_control"] = tc_code
+
+        # Dates: datetime or None
+        for field in ["start_date", "end_date", "date_received", "date_registered"]:
+            raw = details.get(field, "")
+            parsed = parse_date(raw)
+            flattened[field] = parsed
+
+        # nat_championship: bool (true if non-null)
+        flattened["nat_championship"] = parse_nat_championship(details.get("nat_championship", ""))
 
     return flattened
 
@@ -380,6 +394,95 @@ def results_to_dataframe(results: List[Dict]) -> pd.DataFrame:
     """Convert results list to pandas DataFrame."""
     flattened_results = [flatten_result(r) for r in results]
     return pd.DataFrame(flattened_results)
+
+
+def build_report(results: List[Dict]) -> Dict:
+    """
+    Build report with tournament count, distributions, nulls, and time_control unique values.
+    """
+    df = results_to_dataframe(results)
+    successful = [r for r in results if r.get("success", False)]
+    df_success = results_to_dataframe(successful) if successful else pd.DataFrame()
+
+    report: Dict = {"tournaments_total": len(results), "tournaments_success": len(successful)}
+
+    if df_success.empty:
+        report["nulls_by_column"] = {}
+        report["distribution"] = {}
+        report["time_control_unique_count"] = 0
+        return report
+
+    # Nulls per column (empty string or NaN counts as null)
+    nulls = {}
+    for col in df_success.columns:
+        if col in ("tournament_id", "success", "error"):
+            continue
+        nulls[col] = int((df_success[col].isna() | (df_success[col].astype(str).str.strip() == "")).sum())
+    report["nulls_by_column"] = nulls
+
+    # Distribution for system, hybrid, category, type, zone
+    dist_cols = ["system", "hybrid", "category", "type", "zone"]
+    report["distribution"] = {}
+    for col in dist_cols:
+        if col not in df_success.columns:
+            continue
+        non_null = df_success[col].dropna()
+        non_null = non_null[non_null.astype(str).str.strip() != ""]
+        if len(non_null) == 0:
+            report["distribution"][col] = {"unique_values": [], "counts": {}}
+        else:
+            counts = non_null.value_counts().to_dict()
+            report["distribution"][col] = {
+                "unique_values": sorted(counts.keys(), key=str),
+                "counts": {str(k): int(v) for k, v in counts.items()},
+            }
+
+    # Time control unique values (for separate file)
+    if "time_control" in df_success.columns:
+        tc = df_success["time_control"].dropna()
+        tc = tc[tc.astype(str).str.strip() != ""]
+        report["time_control_unique_count"] = tc.nunique()
+    else:
+        report["time_control_unique_count"] = 0
+
+    return report
+
+
+def save_report(results: List[Dict], report_path: str):
+    """Save report JSON."""
+    try:
+        report = build_report(results)
+        dirname = os.path.dirname(report_path)
+        if dirname:
+            os.makedirs(dirname, exist_ok=True)
+        with open(report_path, "w", encoding="utf-8") as f:
+            json.dump(report, f, indent=2, ensure_ascii=False)
+        logger.info(f"Saved report to {report_path}")
+    except Exception as e:
+        logger.error(f"Report save failed: {e}")
+
+
+def save_time_control_unique_values(results: List[Dict], output_path: str):
+    """Write all unique raw time_control values to a file for parsing analysis."""
+    try:
+        successful = [r for r in results if r.get("success", False)]
+        if not successful:
+            return
+        raw_values = [
+            r.get("details", {}).get("time_control", "")
+            for r in successful
+            if r.get("details", {}).get("time_control")
+        ]
+        unique = sorted(set(v.strip() for v in raw_values if v and str(v).strip()), key=str)
+        dirname = os.path.dirname(output_path)
+        if dirname:
+            os.makedirs(dirname, exist_ok=True)
+        with open(output_path, "w", encoding="utf-8") as f:
+            for v in unique:
+                f.write(f"{v}\n")
+        logger.info(f"Saved {len(unique)} unique time_control values to {output_path}")
+    except Exception as e:
+        logger.error(f"Time control unique values save failed: {e}")
 
 
 def save_results_parquet(results: List[Dict], parquet_path: str):
@@ -398,7 +501,7 @@ def save_results_parquet(results: List[Dict], parquet_path: str):
 def save_results_json_sample(
     results: List[Dict], json_path: str, sample_size: int = 100
 ):
-    """Save a random sample of results as JSON file."""
+    """Save a random sample of flattened results (processed format) as JSON file."""
     try:
         # Filter to successful results only for the sample
         successful_results = [r for r in results if r.get("success", False)]
@@ -407,19 +510,127 @@ def save_results_json_sample(
             logger.warning("No successful results to sample for JSON")
             return
 
-        # Sample up to sample_size records
+        # Sample up to sample_size records and flatten (same schema as parquet)
         sample = random.sample(
             successful_results, min(sample_size, len(successful_results))
         )
+        flattened = [flatten_result(r) for r in sample]
 
         dirname = os.path.dirname(json_path)
         if dirname:
             os.makedirs(dirname, exist_ok=True)
         with open(json_path, "w", encoding="utf-8") as f:
-            json.dump(sample, f, indent=2, ensure_ascii=False)
-        logger.info(f"Saved random sample of {len(sample)} records to {json_path}")
+            json.dump(flattened, f, indent=2, ensure_ascii=False, default=str)
+        logger.info(f"Saved random sample of {len(flattened)} records to {json_path}")
     except Exception as e:
         logger.error(f"JSON sample save failed: {e}")
+
+
+def build_and_save_report(
+    results: List[Dict],
+    parquet_path: str,
+) -> None:
+    """
+    Build report (n_tournaments, distributions, nulls) and write time_control
+    unique values to a separate file.
+    """
+    successful = [r for r in results if r.get("success", False)]
+    if not successful:
+        logger.warning("No successful results for report")
+        return
+
+    df = results_to_dataframe(successful)
+    detail_cols = [
+        "id", "name", "city", "fed", "n_players", "system", "hybrid",
+        "category", "start_date", "end_date", "date_received", "date_registered",
+        "type", "time_control", "zone", "nat_championship",
+    ]
+    cols = [c for c in detail_cols if c in df.columns]
+
+    nulls_by_column = {}
+    for c in cols:
+        if c in df.columns:
+            nulls_by_column[c] = int((df[c].isna() | (df[c].astype(str).str.strip() == "")).sum())
+
+    dist_cols = ["system", "hybrid", "category", "type", "zone"]
+    distributions = {}
+    for c in dist_cols:
+        if c in df.columns:
+            counts = df[c].value_counts()
+            distributions[c] = {
+                "unique_values": sorted(counts.index.dropna().astype(str).unique().tolist()),
+                "distribution": {str(k): int(v) for k, v in counts.items()},
+            }
+
+    # time_control_defaulted_to_standard: count and sample when first word wasn't blitz/rapid/standard
+    tc_defaulted = [
+        (r.get("details", {}).get("time_control", ""), r.get("tournament_id", ""))
+        for r in successful
+        if r.get("details", {}).get("time_control")
+    ]
+    tc_defaulted = [(raw, tid) for raw, tid in tc_defaulted if raw and parse_time_control(raw)[1]]
+    tc_defaulted_sample = [
+        {"tournament_id": tid, "raw_value": raw}
+        for raw, tid in (tc_defaulted[:10] if len(tc_defaulted) > 10 else tc_defaulted)
+    ]
+
+    # n_players_odd: invalid (not int, or <=2)
+    n_players_odd = []
+    for r in successful:
+        raw = r.get("details", {}).get("n_players", "")
+        _, valid = parse_n_players(raw)
+        if not valid:
+            n_players_odd.append((raw, r.get("tournament_id", "")))
+    n_players_odd_sample = [
+        {"tournament_id": tid, "raw_value": raw}
+        for raw, tid in (n_players_odd[:10] if len(n_players_odd) > 10 else n_players_odd)
+    ]
+
+    # nat_championship raw distribution
+    nat_raw = [r.get("details", {}).get("nat_championship", "") for r in successful]
+    nat_counts = Counter(str(v).strip() if v else "" for v in nat_raw)
+    nat_championship_distribution = {
+        "unique_values": sorted(nat_counts.keys()),
+        "distribution": {str(k): int(v) for k, v in nat_counts.items()},
+    }
+
+    report = {
+        "tournaments_count": len(successful),
+        "nulls_by_column": nulls_by_column,
+        "distributions": distributions,
+        "time_control_defaulted_to_standard": {
+            "count": len(tc_defaulted),
+            "sample": tc_defaulted_sample,
+        },
+        "n_players_odd": {
+            "count": len(n_players_odd),
+            "sample": n_players_odd_sample,
+        },
+        "nat_championship_raw_distribution": nat_championship_distribution,
+    }
+
+    base = parquet_path.replace(".parquet", "") if parquet_path.endswith(".parquet") else parquet_path
+    report_path = base + "_report.json"
+    time_control_path = base + "_time_control_unique_values.txt"
+
+    dirname = os.path.dirname(report_path)
+    if dirname:
+        os.makedirs(dirname, exist_ok=True)
+
+    with open(report_path, "w", encoding="utf-8") as f:
+        json.dump(report, f, indent=2, ensure_ascii=False)
+    logger.info(f"Saved report to {report_path}")
+
+    # Time control unique values (raw, one per line for parsing analysis)
+    raw_tc = [
+        r.get("details", {}).get("time_control", "")
+        for r in successful
+        if r.get("details", {}).get("time_control")
+    ]
+    unique_tc = sorted(set(v.strip() for v in raw_tc if v and str(v).strip()), key=str)
+    with open(time_control_path, "w", encoding="utf-8") as f:
+        f.write("\n".join(unique_tc))
+    logger.info(f"Saved {len(unique_tc)} unique raw time_control values to {time_control_path}")
 
 
 def save_checkpoint(
@@ -674,7 +885,7 @@ def main():
                 actual_rate = total_processed / elapsed if elapsed > 0 else 0
 
                 if result["success"]:
-                    name = result.get("details", {}).get("tournament_name", "unknown")
+                    name = result.get("details", {}).get("name", "unknown")
                     retry_info = f" [Retry pass {pass_num + 1}]" if pass_num > 0 else ""
                     http_retries = (
                         f" [{num_attempts} HTTP attempts]" if num_attempts > 1 else ""
@@ -730,7 +941,7 @@ def main():
                     rate = rate_limiter.get_rate()
                     if result["success"]:
                         name = result.get("details", {}).get(
-                            "tournament_name", "unknown"
+                            "name", "unknown"
                         )
                         logger.info(
                             f"[{total_processed}/{len(tournament_ids)}] ✓ {tournament_id}: {name} | "
@@ -768,6 +979,9 @@ def main():
         # Save random sample of 100 successful results as JSON
         if json_path:
             save_results_json_sample(all_results, json_path, sample_size=100)
+
+        # Build and save report (distributions, nulls, time_control unique values)
+        build_and_save_report(all_results, parquet_path)
     else:
         # If no output path specified, dump to stdout as JSON (for backwards compatibility)
         json.dump(all_results, sys.stdout, indent=2, ensure_ascii=False)

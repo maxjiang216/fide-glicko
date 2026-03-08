@@ -28,14 +28,13 @@ class TestFixtureBasedParsing:
 
         assert error is None
         assert details is not None
-        assert details.get("event_code") == "368261"
-        assert details.get("tournament_name") == "FIDE Candidates Tournament 2024"
+        assert details.get("id") == "368261"
+        assert details.get("name") == "FIDE Candidates Tournament 2024"
         assert details.get("city") == "Toronto"
-        assert details.get("country") == "CAN"
-        assert details.get("number_of_players") == "8"
+        assert details.get("fed") == "CAN"
+        assert details.get("n_players") == "8"
         assert details.get("start_date") == "2024-04-03"
         assert details.get("end_date") == "2024-04-23"
-        assert "Chief Arbiter" in str(details) or "chief_arbiter" in details
 
     @pytest.mark.online
     def test_live_fetch_matches_fixture(self):
@@ -88,11 +87,11 @@ class TestFixtureBasedParsing:
         assert details is not None
         assert len(details) > 0
 
-        required = {"event_code", "tournament_name", "city", "country"}
+        required = {"id", "name", "city", "fed"}
         assert required <= set(
             details.keys()
         ), f"Missing keys: {required - set(details.keys())}"
-        assert details["event_code"] == "368261"
-        assert details["tournament_name"]
+        assert details["id"] == "368261"
+        assert details["name"]
         assert details["city"]
-        assert details["country"]
+        assert details["fed"]

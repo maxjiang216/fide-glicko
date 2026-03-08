@@ -206,12 +206,14 @@ def validate_players_in_list(players_path: Path, reports_path: Path) -> tuple[in
 
     pl = pd.read_parquet(players_path)
     rp = pd.read_parquet(reports_path)
-    if "id" not in pl.columns or "white_id" not in rp.columns or "black_id" not in rp.columns:
+    white_col = "white_player_id" if "white_player_id" in rp.columns else "white_id"
+    black_col = "black_player_id" if "black_player_id" in rp.columns else "black_id"
+    if "id" not in pl.columns or white_col not in rp.columns or black_col not in rp.columns:
         return 0, 0, []
 
     player_ids = set(pl["id"].astype(str).dropna())
-    white = set(rp["white_id"].astype(str).dropna())
-    black = set(rp["black_id"].astype(str).dropna())
+    white = set(rp[white_col].astype(str).dropna())
+    black = set(rp[black_col].astype(str).dropna())
     report_ids = white | black
     report_ids.discard("")
     report_ids.discard("nan")
@@ -394,8 +396,9 @@ def main() -> int:
 
         details_out = test_dir / "details" / f"{month_key}.parquet"
         details_out.parent.mkdir(parents=True, exist_ok=True)
-        reports_out = test_dir / "reports" / f"{month_key}.parquet"
-        reports_out.parent.mkdir(parents=True, exist_ok=True)
+        reports_base = test_dir / "reports" / month_key
+        reports_base.parent.mkdir(parents=True, exist_ok=True)
+        reports_games_out = test_dir / "reports" / f"{month_key}_games.parquet"
 
         # Run details
         print(f"  Running get_tournament_details.py...", flush=True)
@@ -421,7 +424,7 @@ def main() -> int:
         reports_cmd = [
             sys.executable, str(SCRAPER / "get_tournament_reports.py"),
             "--input", str(ids_file),
-            "--output", str(reports_out.with_suffix("")),
+            "--output", str(reports_base),
             "--no-samples",
         ]
         if details_path_arg:
@@ -432,17 +435,18 @@ def main() -> int:
             res.reports_error = err
             res.errors.append(f"get_tournament_reports: {err}")
             print(f"  FAILED get_tournament_reports: {err[:120]}", flush=True)
-        elif reports_out.exists():
-            rp = pd.read_parquet(reports_out)
-            if "tournament_code" in rp.columns:
-                res.tournaments_with_reports = rp["tournament_code"].nunique()
+        elif reports_games_out.exists():
+            rp = pd.read_parquet(reports_games_out)
+            tc_col = "tournament_id" if "tournament_id" in rp.columns else "tournament_code"
+            if tc_col in rp.columns:
+                res.tournaments_with_reports = rp[tc_col].nunique()
             res.games_count = len(rp)
             print(f"  get_tournament_reports OK ({res.games_count} games)", flush=True)
 
         # Validate: players in list
         print(f"  Validating players...", flush=True)
         res.players_in_reports, res.players_missing_from_list, res.sample_missing_ids = validate_players_in_list(
-            players_path, reports_out
+            players_path, reports_games_out
         )
 
         # Player list anomalies (check once per month - same list)

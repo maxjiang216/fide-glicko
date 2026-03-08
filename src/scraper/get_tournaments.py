@@ -414,6 +414,7 @@ async def scrape_month(
     max_concurrency: int = 20,
     max_retries: int = 3,
     retry_delay: float = 1.0,
+    limit: int = 0,
 ) -> List[Tournament]:
     """
     Scrape all federations for a given month.
@@ -530,6 +531,11 @@ async def scrape_month(
     # Sort by ID
     unique_tournaments.sort(key=lambda t: int(t.tournament_id))
 
+    # Apply limit if set (for testing)
+    if limit > 0:
+        unique_tournaments = unique_tournaments[:limit]
+        logger.info(f"Limited to first {limit} unique tournaments")
+
     # Prepare JSON data
     output_data = [
         {
@@ -645,6 +651,12 @@ def main() -> int:
     parser.add_argument(
         "--quiet", "-q", action="store_true", help="Disable verbose output"
     )
+    parser.add_argument(
+        "--limit",
+        type=int,
+        default=0,
+        help="Process only first N unique tournaments (for testing; 0 = no limit)",
+    )
 
     args = parser.parse_args()
 
@@ -683,6 +695,7 @@ def main() -> int:
                 args.concurrency,
                 args.max_retries,
                 args.retry_delay,
+                args.limit,
             )
         )
         return 0

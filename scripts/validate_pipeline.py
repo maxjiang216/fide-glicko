@@ -59,14 +59,16 @@ def validate_player_list_vs_reports(
 
     if "id" not in players_df.columns:
         return {"error": f"Player list missing 'id' column: {list(players_df.columns)}"}
-    if "white_id" not in reports_df.columns or "black_id" not in reports_df.columns:
+    white_col = "white_player_id" if "white_player_id" in reports_df.columns else "white_id"
+    black_col = "black_player_id" if "black_player_id" in reports_df.columns else "black_id"
+    if white_col not in reports_df.columns or black_col not in reports_df.columns:
         return {
-            "error": f"Reports missing white_id/black_id: {list(reports_df.columns)}"
+            "error": f"Reports missing {white_col}/{black_col}: {list(reports_df.columns)}"
         }
 
     player_ids = set(players_df["id"].astype(str).dropna())
-    white_ids = set(reports_df["white_id"].astype(str).dropna())
-    black_ids = set(reports_df["black_id"].astype(str).dropna())
+    white_ids = set(reports_df[white_col].astype(str).dropna())
+    black_ids = set(reports_df[black_col].astype(str).dropna())
     report_ids = white_ids | black_ids
 
     missing = report_ids - player_ids
@@ -96,18 +98,23 @@ def validate_details_vs_reports(
     details_df = pd.read_parquet(details_path)
     reports_df = pd.read_parquet(reports_path)
 
-    if "event_code" not in details_df.columns:
-        return {"error": f"Details missing event_code: {list(details_df.columns)}"}
-    if "tournament_code" not in reports_df.columns:
-        return {"error": f"Reports missing tournament_code: {list(reports_df.columns)}"}
+    ec_col = "event_code" if "event_code" in details_df.columns else "id"
+    if ec_col not in details_df.columns:
+        return {"error": f"Details missing event_code/id: {list(details_df.columns)}"}
+    tc_col = "tournament_id" if "tournament_id" in reports_df.columns else "tournament_code"
+    if tc_col not in reports_df.columns:
+        return {"error": f"Reports missing {tc_col}: {list(reports_df.columns)}"}
+    white_col = "white_player_id" if "white_player_id" in reports_df.columns else "white_id"
+    black_col = "black_player_id" if "black_player_id" in reports_df.columns else "black_id"
+    date_col = "round_date" if "round_date" in reports_df.columns else "date"
 
     # Successful details only
     success_details = details_df[details_df["success"] == True].copy()
-    success_details["event_code_str"] = success_details["event_code"].astype(str)
+    success_details["event_code_str"] = success_details[ec_col].astype(str)
 
-    report_codes = set(reports_df["tournament_code"].astype(str).dropna())
+    report_codes = set(reports_df[tc_col].astype(str).dropna())
     detail_codes = set(
-        str(c) for c in success_details["event_code"].dropna() if str(c).strip()
+        str(c) for c in success_details[ec_col].dropna() if str(c).strip()
     )
 
     in_reports_not_details = report_codes - detail_codes
@@ -118,11 +125,8 @@ def validate_details_vs_reports(
     for tc in report_codes:
         if tc not in detail_codes:
             continue
-        report_players = set(
-            reports_df[reports_df["tournament_code"] == tc]["white_id"].astype(str)
-        ) | set(
-            reports_df[reports_df["tournament_code"] == tc]["black_id"].astype(str)
-        )
+        sub = reports_df[reports_df[tc_col] == tc]
+        report_players = set(sub[white_col].astype(str)) | set(sub[black_col].astype(str))
         report_players.discard("")
         report_players.discard("nan")
         report_count = len(report_players)
@@ -131,7 +135,7 @@ def validate_details_vs_reports(
         if len(rows) == 0:
             continue
         row = rows.iloc[0]
-        detail_count_raw = row["number_of_players"]
+        detail_count_raw = row.get("n_players") or row.get("number_of_players")
         try:
             detail_count = int(float(detail_count_raw)) if pd.notna(detail_count_raw) and str(detail_count_raw).strip() else None
         except (ValueError, TypeError):
@@ -150,7 +154,7 @@ def validate_details_vs_reports(
     # Date consistency: min/max date in reports vs details start/end
     date_issues = []
     for tc in list(report_codes & detail_codes)[:500]:  # limit for speed
-        rep_dates = reports_df[reports_df["tournament_code"] == tc]["date"].dropna()
+        rep_dates = reports_df[reports_df[tc_col] == tc][date_col].dropna()
         if len(rep_dates) == 0:
             continue
         rep_min = str(rep_dates.min())[:10]
@@ -216,7 +220,7 @@ def main() -> int:
         else base / "src" / "data" / "players_list.parquet"
     )
     details_path = base / args.data_dir / "tournament_details" / f"{month_key}.parquet"
-    reports_path = base / args.data_dir / "tournament_reports" / f"{month_key}.parquet"
+    reports_path = base / args.data_dir / "tournament_reports" / f"{month_key}_games.parquet"
 
     print("=" * 80)
     print("FIDE Pipeline Validation")

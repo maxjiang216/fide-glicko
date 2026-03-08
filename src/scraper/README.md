@@ -6,7 +6,7 @@ This directory contains scripts to scrape data from the FIDE website.
 
 The scraper consists of five main scripts:
 
-- **`get_player_list.py`**: Downloads the FIDE Combined Rating List (Standard, Rapid, Blitz) from `https://ratings.fide.com/download_lists.phtml`. Uses the XML format for unambiguous parsing (no fixed-width column guesswork). Outputs: `src/data/players_list.parquet` and `players_list_sample.json` with fields `id`, `name`, `byear`, `sex`, `fed`, `title`.
+- **`get_player_list.py`**: Downloads the FIDE Combined Rating List (Standard, Rapid, Blitz) from `https://ratings.fide.com/download_lists.phtml`. Uses the XML format for unambiguous parsing (no fixed-width column guesswork). Outputs: `src/data/players_list.parquet` and `players_list_sample.json` with fields `byear`, `id`, `fed`, `name`, `sex`, `title`, `w_title`.
 
 - **`get_federations.py`**: Scrapes the FIDE website to retrieve a list of all chess federations and saves them to a CSV file. This script fetches the list of federations from the FIDE ratings website (`https://ratings.fide.com/rated_tournaments.phtml`) and saves them with two columns: the 3-letter federation code and the full federation name. **CGO** (Republic of the Congo) is not on FIDE's country selector; it is added as a hard-coded fallback when missing.
 
@@ -28,8 +28,9 @@ python src/scraper/get_player_list.py
 
 This will:
 - Download `players_list_xml.zip` from FIDE (~45 MB)
-- Parse the XML and extract `id`, `name`, `byear`, `sex`, `fed`, `title`
+- Parse the XML and extract `byear`, `id`, `fed`, `name`, `sex`, `title`, `w_title`
 - Save to `src/data/players_list.parquet` and `players_list_sample.json`
+- Write a report to `players_list_report.json` with field discovery, null counts, odd-value counts, sex counts, byear range, and non-standard federation counts
 - Skip if output exists unless `--override` is used
 
 ### Getting Federations
@@ -103,6 +104,10 @@ Alternatively, use `--input` with a tournament codes file and `--details-path` t
 | `--directory` | `-d` | `data` | Directory to output results (resolves to `src/data` when `data`) |
 | `--override` | `-o` | `False` | Overwrite existing parquet/JSON even if they exist |
 | `--quiet` | `-q` | `False` | Reduce output |
+| `--federations` | `-f` | `data/federations.csv` | Path to federations CSV for non-standard fed check |
+| `--report` | `-r` | `players_list_report.json` | Path for report JSON (in output dir) |
+
+**Report file** (`players_list_report.json`): Contains `players_found`, `xml_fields_found` (all XML element names, including uncollected ones), `odd_by_column` (counts of odd/invalid values per column), `byear_min`/`byear_max`, `sex_counts` (M, F, null), `nulls_by_column`, `non_standard_federations_count` (when federations file is used).
 
 **Examples:**
 
@@ -112,6 +117,9 @@ python src/scraper/get_player_list.py
 
 # Force re-download and overwrite
 python src/scraper/get_player_list.py --override
+
+# Custom report path
+python src/scraper/get_player_list.py --report data/player_report.json
 ```
 
 ### `get_federations.py`
@@ -247,7 +255,9 @@ python src/scraper/get_tournament_reports.py --year 2025 --month 1 --limit 20
 - **Parquet**: `src/data/players_list.parquet` (all players)
 - **JSON sample**: `src/data/players_list_sample.json` (first 100 rows)
 
-**Fields:** `id` (FIDE ID), `name`, `byear` (birth year, 1900–current), `sex` (M/F), `fed` (3-letter, uppercase), `title` (GM, IM, FM, etc.)
+**Fields:** `byear` (birth year, 1900–current), `id` (FIDE ID), `fed` (3-letter, uppercase), `name`, `sex` (M/F), `title` (open titles only: GM, IM, FM, CM), `w_title` (women's titles: WGM, WIM, WFM, WCM).
+
+**Title logic:** `title` holds only open titles (GM, IM, FM, CM). Women's titles (WGM, WIM, WFM, WCM) go in `w_title`. If the XML has a women's title in the `title` field and `w_title` is empty, it is stored in `w_title` and `title` is left blank. The `o_title` field (arbiter, organizer, etc.) is parsed for reporting only and not stored.
 
 **Normalization:** Federation codes are uppercased; single-letter titles (g, m, f, etc.) are expanded to full codes (GM, IM, FM).
 
@@ -410,11 +420,11 @@ In the JSON sample files, these fields remain as proper JSON arrays.
 - Reads tournament codes from a file, or from `data/tournament_ids/YYYY_MM` (output of `get_tournaments.py`) when using `--year`/`--month`
 - If `get_tournament_details` output exists (`data/tournament_details/YYYY_MM.parquet`), it is used only for start/end dates to improve date format inference
 - With `--input`, use `--details-path` to optionally supply a details Parquet for date inference
-- Outputs:
-  - **Parquet file** (main): One row per game (tournament_code, round, date, white_id, black_id, white_score, forfeit). Games are deduplicated (each game appears once, from white player's perspective)
-  - **JSON sample**: Random sample of player-round rows (verbose format with all fields)
-  - **CSV sample**: Same as JSON but CSV format
-- Auto-generates paths from year/month: `data/tournament_reports/YYYY_MM.parquet`, `_sample.json`, `_sample.csv`
+- Outputs two Parquet files per month:
+  - **Players** (`YYYY_MM_players.parquet`): PK (player_id, tournament_id). Columns: player_name, player_country, player_rating, player_total, rank
+  - **Games** (`YYYY_MM_games.parquet`): PK (white_player_id, tournament_id, round_number). Columns: black_player_id, round_date, score (white's 0/0.5/1), forfeit (from white's perspective: "+", "-", or "")
+- Optional **JSON sample** (raw tournament results) and **CSV sample** (from games parquet)
+- Auto-generates paths from year/month: `data/tournament_reports/YYYY_MM_players.parquet`, `_games.parquet`, `_sample.json`, `_sample.csv`
 - Use `--no-samples` to skip JSON/CSV and only write Parquet
 
 **Throughput:**
