@@ -11,6 +11,7 @@ import json
 import logging
 import os
 import random
+import signal
 import sys
 import time
 from collections import Counter
@@ -31,6 +32,9 @@ logging.basicConfig(
     datefmt="%Y-%m-%d %H:%M:%S",
 )
 logger = logging.getLogger(__name__)
+
+# State for graceful shutdown
+_shutdown_state = {}
 
 
 class RateLimiter:
@@ -782,6 +786,22 @@ def main():
     all_results = []
     success_count = 0
     error_count = 0
+
+    def _graceful_shutdown(signum, frame):
+        logger.warning("\nReceived interrupt, initiating graceful shutdown...")
+        if all_results and parquet_path:
+            try:
+                save_results_parquet(all_results, parquet_path)
+                if json_path:
+                    save_results_json_sample(all_results, json_path, sample_size=100)
+                build_and_save_report(all_results, parquet_path)
+                logger.info("Saved %d results to %s", len(all_results), parquet_path)
+            except Exception as e:
+                logger.error("Error saving partial results: %s", e)
+        sys.exit(130 if signum == 2 else 0)
+
+    signal.signal(signal.SIGINT, _graceful_shutdown)
+    signal.signal(signal.SIGTERM, _graceful_shutdown)
     total_retries = (
         0  # Total number of tournaments that have been retried at least once
     )

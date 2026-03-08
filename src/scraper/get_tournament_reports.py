@@ -8,11 +8,13 @@ Supports rate limiting, retries, checkpoints, and progress tracking.
 """
 
 import argparse
+import copy
 import json
 import logging
 import os
 import random
 import re
+import signal
 import sys
 import time
 from collections import Counter
@@ -118,14 +120,21 @@ def _to_year(y: str) -> int:
     return 2000 + n if n < 50 else 1900 + n
 
 
-def parse_details_date_to_iso(date_str: str) -> Optional[str]:
+def parse_details_date_to_iso(date_val) -> Optional[str]:
     """
     Parse start_date/end_date from tournament details to ISO (YYYY-MM-DD).
+    Accepts str, datetime, or pandas Timestamp (from Parquet).
     FIDE uses formats like "2024.12.30", "30.12.2024", "2024-12-30".
     """
-    if not date_str or not isinstance(date_str, str):
+    if date_val is None or (isinstance(date_val, float) and pd.isna(date_val)):
         return None
-    s = date_str.strip()
+    if hasattr(date_val, "strftime"):
+        return date_val.strftime("%Y-%m-%d")
+    if not isinstance(date_val, str):
+        date_val = str(date_val)
+    s = date_val.strip()
+    if not s or s.lower() == "nat":
+        return None
     # YYYY.MM.DD or YYYY-MM-DD
     m = re.match(r"(\d{4})[.\-](\d{1,2})[.\-](\d{1,2})", s)
     if m:
@@ -171,15 +180,24 @@ def _parse_round_date_with_format(date_str: str, fmt: str) -> Optional[str]:
     return None
 
 
+def _is_valid_parsed_year(year: int) -> bool:
+    """Rule 1: Years should be in 2002..current_year (FIDE round dates)."""
+    current_year = datetime.now().year
+    return 2002 <= year <= current_year + 1
+
+
 def infer_date_format(
     date_strings: List[str],
     start_iso: Optional[str] = None,
     end_iso: Optional[str] = None,
+    report_start_iso: Optional[str] = None,
 ) -> str:
     """
     Infer date format (yy/mm/dd vs dd/mm/yy) from round dates.
-    Picks format that minimizes date range; if start/end from tournament
-    details are provided, prefers format where all dates fall within [start, end].
+
+    Rule 1: Reject parses where year is outside 2002..current_year, or month/day invalid.
+    Rule 2: Prefer format that gives tightest date range; use start/end from details
+    (and report_start from report page "Start: YYYY-MM-DD") to constrain/penalize.
     """
     candidates = ["yy/mm/dd", "dd/mm/yy"]
     date_strs = [
@@ -188,18 +206,16 @@ def infer_date_format(
     if not date_strs:
         return "yy/mm/dd"  # default
 
-    start_dt = None
-    end_dt = None
-    if start_iso:
-        try:
-            start_dt = datetime.strptime(start_iso, "%Y-%m-%d")
-        except ValueError:
-            pass
-    if end_iso:
-        try:
-            end_dt = datetime.strptime(end_iso, "%Y-%m-%d")
-        except ValueError:
-            pass
+    # Build set of anchor dates from details and report header
+    anchor_dates: List[datetime] = []
+    for iso in (start_iso, end_iso, report_start_iso):
+        if iso:
+            try:
+                anchor_dates.append(datetime.strptime(iso[:10], "%Y-%m-%d"))
+            except ValueError:
+                pass
+    start_dt = min(anchor_dates) if anchor_dates else None
+    end_dt = max(anchor_dates) if anchor_dates else None
 
     best = "yy/mm/dd"
     best_score = float("inf")
@@ -208,17 +224,22 @@ def infer_date_format(
         parsed = []
         for s in date_strs:
             iso = _parse_round_date_with_format(s, fmt)
-            if iso:
-                try:
-                    parsed.append(datetime.strptime(iso, "%Y-%m-%d"))
-                except ValueError:
-                    pass
+            if not iso:
+                continue
+            try:
+                dt = datetime.strptime(iso, "%Y-%m-%d")
+                # Rule 1: discard if year out of valid range
+                if not _is_valid_parsed_year(dt.year):
+                    continue
+                parsed.append(dt)
+            except ValueError:
+                pass
         if not parsed:
             continue
         min_d, max_d = min(parsed), max(parsed)
         range_days = (max_d - min_d).days
 
-        # Penalty if dates fall outside [start, end]
+        # Rule 2: penalize dates outside [start, end] from details/report
         out_of_range = 0
         if start_dt and min_d < start_dt:
             out_of_range += (start_dt - min_d).days * 1000
@@ -249,6 +270,16 @@ def parse_date_to_iso(date_str: str, date_format: Optional[str] = None) -> str:
     if result:
         return result
     return _parse_round_date_with_format(date_str, "dd/mm/yy") or ""
+
+
+def parse_iso_to_datetime(iso_str: str):
+    """Convert ISO date string (YYYY-MM-DD) to datetime. Returns None if invalid."""
+    if not iso_str or not str(iso_str).strip():
+        return None
+    try:
+        return datetime.strptime(str(iso_str).strip()[:10], "%Y-%m-%d")
+    except ValueError:
+        return None
 
 
 def parse_round_date(round_text: str) -> Tuple[Optional[int], Optional[str]]:
@@ -383,6 +414,17 @@ def fetch_tournament_report(
 
             soup = BeautifulSoup(response.content, "html.parser")
 
+            # Extract "Start: YYYY-MM-DD" from report header for date format inference
+            report_start_iso = None
+            calc_body = soup.find("div", id="calc_list") or soup
+            start_match = re.search(
+                r"Start:\s*<b>(\d{4}-\d{2}-\d{2})</b>",
+                str(calc_body),
+                re.IGNORECASE,
+            )
+            if start_match:
+                report_start_iso = start_match.group(1)
+
             # Find the main results table
             table = soup.find("table", class_="calc_table")
             if not table:
@@ -421,17 +463,9 @@ def fetch_tournament_report(
                         player_id = first_cell_text
                         player_name = extract_text_from_cell(cells[1])
                         player_country = cells[2].get_text(strip=True)
-                        player_rating = cells[5].get_text(strip=True)
                         player_total = cells[6].get_text(strip=True)
 
-                        # Try to parse rating and total as numbers
-                        try:
-                            player_rating_int = (
-                                int(player_rating) if player_rating else 0
-                            )
-                        except ValueError:
-                            player_rating_int = 0
-
+                        # Total score (no longer collecting rating - use profile chart if needed)
                         try:
                             player_total_float = (
                                 float(player_total) if player_total else 0.0
@@ -445,7 +479,6 @@ def fetch_tournament_report(
                             "id": player_id,
                             "name": player_name,
                             "country": player_country,
-                            "rating": player_rating_int,
                             "total": player_total_float,
                             "rank": rank,
                             "rounds": [],
@@ -533,11 +566,13 @@ def fetch_tournament_report(
             if not players:
                 return None, "no players found", len(attempt_times)
 
-            return (
-                {"tournament_code": tournament_code, "players": players},
-                None,
-                len(attempt_times),
-            )
+            report_dict = {
+                "tournament_code": tournament_code,
+                "players": players,
+            }
+            if report_start_iso:
+                report_dict["report_start"] = report_start_iso
+            return (report_dict, None, len(attempt_times))
 
         except requests.exceptions.Timeout as e:
             last_error = f"timeout: {e}"
@@ -634,9 +669,9 @@ def flatten_result(result: Dict) -> List[Dict]:
     if not success:
         flattened.append({
             "tournament_code": tc, "success": False, "error": error,
-            "player_id": "", "player_name": "", "player_country": "", "player_rating": 0, "player_total": 0.0,
+            "player_id": "", "player_name": "", "player_country": "", "player_total": 0.0,
             "round": None, "round_date": "", "opp_name": "", "opp_id": "", "color": "",
-            "opp_fed": "", "title": "", "wtitle": "", "opp_rating": 0, "score": None, "forfeit": "",
+            "opp_fed": "", "title": "", "wtitle": "", "score": None, "forfeit": "",
         })
         return flattened
 
@@ -644,29 +679,27 @@ def flatten_result(result: Dict) -> List[Dict]:
         pid = player.get("id", "")
         pname = player.get("name", "")
         pcountry = player.get("country", "")
-        prating = player.get("rating", 0)
         ptotal = player.get("total", 0.0)
         rounds = player.get("rounds", [])
         if not rounds:
             flattened.append({
                 "tournament_code": tc, "success": True, "error": "",
                 "player_id": pid, "player_name": pname, "player_country": pcountry,
-                "player_rating": prating, "player_total": ptotal,
+                "player_total": ptotal,
                 "round": None, "round_date": "", "opp_name": "", "opp_id": "", "color": "",
-                "opp_fed": "", "title": "", "wtitle": "", "opp_rating": 0, "score": None, "forfeit": "",
+                "opp_fed": "", "title": "", "wtitle": "", "score": None, "forfeit": "",
             })
         else:
             for rd in rounds:
                 flattened.append({
                     "tournament_code": tc, "success": True, "error": "",
                     "player_id": pid, "player_name": pname, "player_country": pcountry,
-                    "player_rating": prating, "player_total": ptotal,
+                    "player_total": ptotal,
                     "round": rd.get("round"), "round_date": rd.get("date", ""),
                     "opp_name": rd.get("opp_name", ""), "opp_id": rd.get("opp_id", ""),
                     "color": rd.get("color", ""), "opp_fed": rd.get("opp_fed", ""),
                     "title": rd.get("title", ""), "wtitle": rd.get("wtitle", ""),
-                    "opp_rating": rd.get("opp_rating", 0), "score": rd.get("score"),
-                    "forfeit": rd.get("forfeit", ""),
+                    "score": rd.get("score"), "forfeit": rd.get("forfeit", ""),
                 })
     return flattened
 
@@ -870,114 +903,10 @@ def validate_pairings(result: Dict) -> None:
                 )
 
 
-def flatten_result(result: Dict) -> List[Dict]:
-    """
-    Flatten a result to player-round rows (legacy format for tests).
-    One row per player-round with tournament_code, player_id, round, round_date, opp_id, color, score, forfeit.
-    """
-    flattened = []
-    tc = result.get("tournament_code", "")
-    success = result.get("success", False)
-    error = result.get("error", "")
-
-    if not success:
-        flattened.append({
-            "tournament_code": tc, "success": False, "error": error,
-            "player_id": "", "player_name": "", "player_country": "", "player_rating": 0, "player_total": 0.0,
-            "round": None, "round_date": "", "opp_name": "", "opp_id": "", "color": "",
-            "opp_fed": "", "title": "", "wtitle": "", "opp_rating": 0, "score": None, "forfeit": "",
-        })
-        return flattened
-
-    for player in result.get("players", []):
-        pid = player.get("id", "")
-        pname = player.get("name", "")
-        pcountry = player.get("country", "")
-        prating = player.get("rating", 0)
-        ptotal = player.get("total", 0.0)
-        rounds = player.get("rounds", [])
-        if not rounds:
-            flattened.append({
-                "tournament_code": tc, "success": True, "error": "",
-                "player_id": pid, "player_name": pname, "player_country": pcountry,
-                "player_rating": prating, "player_total": ptotal,
-                "round": None, "round_date": "", "opp_name": "", "opp_id": "", "color": "",
-                "opp_fed": "", "title": "", "wtitle": "", "opp_rating": 0, "score": None, "forfeit": "",
-            })
-        else:
-            for rd in rounds:
-                flattened.append({
-                    "tournament_code": tc, "success": True, "error": "",
-                    "player_id": pid, "player_name": pname, "player_country": pcountry,
-                    "player_rating": prating, "player_total": ptotal,
-                    "round": rd.get("round"), "round_date": rd.get("date", ""),
-                    "opp_name": rd.get("opp_name", ""), "opp_id": rd.get("opp_id", ""),
-                    "color": rd.get("color", ""),
-                    "opp_fed": rd.get("opp_fed", ""), "title": rd.get("title", ""),
-                    "wtitle": rd.get("wtitle", ""), "opp_rating": rd.get("opp_rating", 0),
-                    "score": rd.get("score"), "forfeit": rd.get("forfeit", ""),
-                })
-    return flattened
-
-
-def flatten_to_games(
-    flattened: List[Dict],
-    tournament_code: str = "",
-    details_map: Optional[Dict[str, Tuple[Optional[str], Optional[str]]]] = None,
-) -> List[Dict]:
-    """
-    Convert player-round rows to game-centric rows (legacy format for tests).
-    Returns list of dicts with white_id, black_id, white_score, forfeit (bool), round, date.
-    """
-    date_strs = list({r.get("round_date", "") for r in flattened if r.get("round_date") and r.get("success")})
-    start_iso, end_iso = None, None
-    if details_map and tournament_code:
-        start_iso, end_iso = details_map.get(tournament_code, (None, None))
-    date_format = infer_date_format(date_strs, start_iso=start_iso, end_iso=end_iso)
-
-    games = []
-    seen: set = set()
-    for row in flattened:
-        if not row.get("success") or row.get("round") is None or not row.get("player_id") or not row.get("opp_id"):
-            continue
-        tc = row.get("tournament_code", tournament_code)
-        rnd = row["round"]
-        color = (row.get("color") or "").strip().lower()
-        forfeit = (row.get("forfeit") or "").strip()
-
-        if color == "white":
-            white_id, black_id = row["player_id"], row["opp_id"]
-        elif color == "black":
-            white_id, black_id = row["opp_id"], row["player_id"]
-        else:
-            continue
-
-        key = (tc, rnd, white_id, black_id)
-        if key in seen:
-            continue
-        seen.add(key)
-
-        score = row.get("score")
-        if forfeit:
-            white_score = 1.0 if (color == "white" and forfeit == "+") or (color == "black" and forfeit == "-") else 0.0
-        elif score is not None:
-            white_score = float(score) if color == "white" else 1.0 - float(score)
-        else:
-            continue
-
-        date_iso = parse_date_to_iso(row.get("round_date", ""), date_format=date_format) or ""
-        games.append({
-            "tournament_code": tc, "round": rnd, "date": date_iso,
-            "white_id": white_id, "black_id": black_id,
-            "white_score": white_score, "forfeit": bool(forfeit),
-        })
-    return games
-
-
 def results_to_players_dataframe(results: List[Dict]) -> pd.DataFrame:
     """
     Build players DataFrame. PK: (player_id, tournament_id).
-    Columns: player_id, tournament_id, player_name, player_country, player_rating, player_total, rank.
+    Columns: player_id, tournament_id, player_name, player_country, player_total, rank.
     """
     rows = []
     for result in results:
@@ -990,14 +919,13 @@ def results_to_players_dataframe(results: List[Dict]) -> pd.DataFrame:
                 "tournament_id": str(tc),
                 "player_name": player.get("name", ""),
                 "player_country": player.get("country", ""),
-                "player_rating": player.get("rating", 0),
                 "player_total": player.get("total", 0.0),
                 "rank": player.get("rank", 0),
             })
     if not rows:
         return pd.DataFrame(columns=[
             "player_id", "tournament_id", "player_name", "player_country",
-            "player_rating", "player_total", "rank",
+            "player_total", "rank",
         ])
     return pd.DataFrame(rows)
 
@@ -1022,7 +950,13 @@ def results_to_games_dataframe(
         start_iso, end_iso = None, None
         if details_map and tc:
             start_iso, end_iso = details_map.get(tc, (None, None))
-        date_format = infer_date_format(date_strs, start_iso=start_iso, end_iso=end_iso)
+        report_start_iso = result.get("report_start")
+        date_format = infer_date_format(
+            date_strs,
+            start_iso=start_iso,
+            end_iso=end_iso,
+            report_start_iso=report_start_iso,
+        )
 
         seen: set = set()  # (white_id, tc, round)
         for row in flattened:
@@ -1057,13 +991,16 @@ def results_to_games_dataframe(
                 continue
 
             date_iso = parse_date_to_iso(row.get("round_date", ""), date_format=date_format) or ""
+            round_dt = parse_iso_to_datetime(date_iso)
+            if round_dt is None:
+                round_dt = pd.NaT
 
             all_games.append({
                 "white_player_id": white_id,
                 "black_player_id": black_id,
                 "tournament_id": tc,
                 "round_number": row["round"],
-                "round_date": date_iso,
+                "round_date": round_dt,
                 "score": white_score,
                 "forfeit": white_forfeit,
             })
@@ -1107,22 +1044,66 @@ def save_games_parquet(
         logger.error(f"Games Parquet save failed: {e}")
 
 
+def _transform_results_round_dates_to_datetime(
+    results: List[Dict],
+    details_map: Optional[Dict[str, Tuple[Optional[str], Optional[str]]]] = None,
+) -> None:
+    """Mutate results in place: convert round 'date' from raw string to datetime."""
+    for result in results:
+        if not result.get("success"):
+            continue
+        tc = result.get("tournament_code", "")
+        date_strs = []
+        for player in result.get("players", []):
+            for rd in player.get("rounds", []):
+                d = rd.get("date", "")
+                if d and isinstance(d, str):
+                    date_strs.append(d)
+        start_iso, end_iso = (None, None)
+        if details_map and tc:
+            start_iso, end_iso = details_map.get(tc, (None, None))
+        report_start_iso = result.get("report_start")
+        date_format = infer_date_format(
+            date_strs,
+            start_iso=start_iso,
+            end_iso=end_iso,
+            report_start_iso=report_start_iso,
+        )
+        for player in result.get("players", []):
+            for rd in player.get("rounds", []):
+                raw = rd.get("date", "")
+                if raw and isinstance(raw, str):
+                    iso = parse_date_to_iso(raw, date_format=date_format)
+                    dt = parse_iso_to_datetime(iso)
+                    rd["date"] = dt if dt is not None else raw
+
+
 def save_verbose_json_sample(
     results: List[Dict],
     json_path: str,
     sample_size: int = 5,
+    details_map: Optional[Dict[str, Tuple[Optional[str], Optional[str]]]] = None,
 ):
-    """Save a sample of raw results (tournaments with players/rounds) to JSON."""
+    """Save a sample of raw results (tournaments with players/rounds) to JSON. Round dates are datetime (ISO when serialized)."""
     try:
         sample_results = [r for r in results if r.get("success")][:sample_size]
         if not sample_results:
             logger.warning("No successful results, skipping JSON sample")
             return
+        # Deep copy to avoid mutating original
+        sample_results = copy.deepcopy(sample_results)
+        _transform_results_round_dates_to_datetime(sample_results, details_map=details_map)
         dirname = os.path.dirname(json_path)
         if dirname:
             os.makedirs(dirname, exist_ok=True)
+
+        def _json_default(obj):
+            if isinstance(obj, datetime):
+                return obj.strftime("%Y-%m-%d")
+            raise TypeError(f"Object of type {type(obj).__name__} is not JSON serializable")
+
         with open(json_path, "w", encoding="utf-8") as f:
-            json.dump(sample_results, f, indent=2, ensure_ascii=False)
+            json.dump(sample_results, f, indent=2, ensure_ascii=False, default=_json_default)
         logger.info(f"Saved sample of {len(sample_results)} tournaments to {json_path}")
     except Exception as e:
         logger.error(f"Verbose JSON sample save failed: {e}")
@@ -1227,10 +1208,19 @@ def main():
         "--players-file",
         type=str,
         default="",
-        help="Path to players_list.parquet for validation (name/country vs expected). When set, also runs pairing validation.",
+        help="Path to players_list.parquet for validation. Default: src/data/players_list.parquet (from repo root).",
+    )
+    parser.add_argument(
+        "--no-validation",
+        action="store_true",
+        help="Skip pairing and player-file validation (faster when not needed).",
     )
 
     args = parser.parse_args()
+
+    # Repo root for default paths
+    _script_dir = Path(__file__).resolve().parent
+    repo_root = _script_dir.parent.parent
 
     # Determine input path and read tournament codes; build details_map for date inference
     tournament_codes = []
@@ -1343,12 +1333,27 @@ def main():
 
     # Load players file for validation (name/country, pairing checks)
     players_df: Optional[pd.DataFrame] = None
-    if args.players_file and os.path.exists(args.players_file):
-        try:
-            players_df = pd.read_parquet(args.players_file)
-            logger.info(f"Loaded players file for validation: {args.players_file} ({len(players_df)} rows)")
-        except Exception as e:
-            logger.warning(f"Could not load players file for validation: {e}")
+    if not args.no_validation:
+        players_file_path = (
+            args.players_file
+            if args.players_file
+            else str(repo_root / "src" / "data" / "players_list.parquet")
+        )
+        if os.path.exists(players_file_path):
+            try:
+                players_df = pd.read_parquet(players_file_path)
+                logger.info(
+                    "Loaded players file for validation: %s (%d rows)",
+                    players_file_path,
+                    len(players_df),
+                )
+            except Exception as e:
+                logger.warning("Could not load players file for validation: %s", e)
+        else:
+            logger.info(
+                "Players file not found at %s; skipping validation",
+                players_file_path,
+            )
 
     logger.info(f"Processing {len(tournament_codes)} tournaments")
     logger.info(
@@ -1369,6 +1374,29 @@ def main():
     error_count = 0
     total_retries = 0
     attempt_log: List[Dict] = [] if args.verbose_errors else []
+
+    def _graceful_shutdown(signum, frame):
+        logger.warning("\nReceived interrupt, initiating graceful shutdown...")
+        if all_results and games_path:
+            try:
+                if players_path:
+                    save_players_parquet(all_results, players_path)
+                save_games_parquet(all_results, games_path, details_map=details_map)
+                if not args.no_samples and json_path:
+                    save_verbose_json_sample(
+                        all_results, json_path, sample_size=100, details_map=details_map
+                    )
+                if not args.no_samples and csv_path:
+                    save_csv_sample_from_parquet(
+                        games_path, csv_path, sample_size=100
+                    )
+                logger.info("Saved %d results to %s", len(all_results), games_path)
+            except Exception as e:
+                logger.error("Error saving partial results: %s", e)
+        sys.exit(130 if signum == 2 else 0)
+
+    signal.signal(signal.SIGINT, _graceful_shutdown)
+    signal.signal(signal.SIGTERM, _graceful_shutdown)
     attempt_counts: List[Tuple[str, int]] = [] if args.verbose_errors else []
     current_tournaments = tournament_codes
 
@@ -1426,9 +1454,10 @@ def main():
                 success_count += 1
                 result["success"] = True
                 result.update(report)
-                validate_pairings(result)
-                if players_df is not None:
-                    validate_against_players_file(result, players_df)
+                if not args.no_validation:
+                    validate_pairings(result)
+                    if players_df is not None:
+                        validate_against_players_file(result, players_df)
                 if args.checkpoint > 0 and success_count % args.checkpoint == 0:
                     checkpoint_path = (
                         games_path + ".checkpoint" if games_path else None
@@ -1539,7 +1568,7 @@ def main():
             if csv_path:
                 save_csv_sample_from_parquet(games_path, csv_path, sample_size=100)
             if json_path:
-                save_verbose_json_sample(all_results, json_path, sample_size=100)
+                save_verbose_json_sample(all_results, json_path, sample_size=100, details_map=details_map)
     else:
         # If no output path specified, dump to stdout as JSON (for backwards compatibility)
         json.dump(all_results, sys.stdout, indent=2, ensure_ascii=False)
@@ -1557,6 +1586,22 @@ def main():
         logger.info(f"  Retries: {total_retries}")
     logger.info(f"  Time: {format_duration(total_time)}")
     logger.info(f"  Average rate: {final_rate:.2f} tournaments/sec")
+
+    # Report tournaments with no successful fetch (orphaned / failed)
+    failed_codes = [
+        r.get("tournament_code", "")
+        for r in all_results
+        if not r.get("success", False)
+    ]
+    if failed_codes:
+        max_show = 20
+        sample = failed_codes[:max_show]
+        logger.info(
+            "  Tournaments with no successful report: %d (%s%s)",
+            len(failed_codes),
+            ", ".join(sample),
+            " ..." if len(failed_codes) > max_show else "",
+        )
     if players_path:
         logger.info(f"  Players Parquet: {players_path}")
     if games_path:

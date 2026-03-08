@@ -421,7 +421,7 @@ In the JSON sample files, these fields remain as proper JSON arrays.
 - If `get_tournament_details` output exists (`data/tournament_details/YYYY_MM.parquet`), it is used only for start/end dates to improve date format inference
 - With `--input`, use `--details-path` to optionally supply a details Parquet for date inference
 - Outputs two Parquet files per month:
-  - **Players** (`YYYY_MM_players.parquet`): PK (player_id, tournament_id). Columns: player_name, player_country, player_rating, player_total, rank
+  - **Players** (`YYYY_MM_players.parquet`): PK (player_id, tournament_id). Columns: player_name, player_country, player_total, rank
   - **Games** (`YYYY_MM_games.parquet`): PK (white_player_id, tournament_id, round_number). Columns: black_player_id, round_date, score (white's 0/0.5/1), forfeit (from white's perspective: "+", "-", or "")
 - Optional **JSON sample** (raw tournament results) and **CSV sample** (from games parquet)
 - Auto-generates paths from year/month: `data/tournament_reports/YYYY_MM_players.parquet`, `_games.parquet`, `_sample.json`, `_sample.csv`

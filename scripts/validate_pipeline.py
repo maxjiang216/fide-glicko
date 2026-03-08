@@ -6,15 +6,24 @@ Compares:
 1. Player list vs reports: Which player IDs in reports are missing from the player list?
 2. Tournament details vs reports: event_code alignment, player counts, date consistency
 
-Can be run standalone (after pipeline has run) or invoked by run_full_pipeline.py.
+Writes a report file by default. Can be run standalone or invoked by run_full_pipeline.py.
 """
 
 import argparse
+import json
+import logging
 import re
 import sys
 from pathlib import Path
 
 import pandas as pd
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(levelname)s - %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+)
+logger = logging.getLogger(__name__)
 
 
 def _parse_date(s) -> str | None:
@@ -190,6 +199,92 @@ def validate_details_vs_reports(
     }
 
 
+def _format_report(
+    base: Path,
+    args,
+    pl_result: dict,
+    dt_result: dict,
+    has_error: bool,
+) -> tuple[str, dict]:
+    """Build human-readable report string and machine-readable dict."""
+    month_key = f"{args.year}_{args.month:02d}"
+    players_path = (
+        Path(args.players_path)
+        if args.players_path
+        else base / "src" / "data" / "players_list.parquet"
+    )
+    details_path = base / args.data_dir / "tournament_details" / f"{month_key}.parquet"
+    reports_path = base / args.data_dir / "tournament_reports" / f"{month_key}_games.parquet"
+
+    lines = [
+        "=" * 80,
+        "FIDE Pipeline Validation",
+        "=" * 80,
+        f"Year: {args.year}, Month: {args.month}",
+        f"Details: {details_path}",
+        f"Reports: {reports_path}",
+        f"Players: {players_path}",
+        "",
+        "-" * 80,
+        "1. Player list vs reports",
+        "-" * 80,
+    ]
+    if "error" in pl_result:
+        lines.append(f"  ERROR: {pl_result['error']}")
+    else:
+        lines.append(f"  Players in list: {pl_result['total_in_player_list']}")
+        lines.append(f"  Unique players in reports: {pl_result['total_in_reports']}")
+        lines.append(f"  Missing from player list: {pl_result['missing_in_player_list']}")
+        if pl_result["missing_in_player_list"] > 0:
+            lines.append(f"  Sample missing IDs: {pl_result['sample_missing']}")
+
+    lines.extend([
+        "",
+        "-" * 80,
+        "2. Tournament details vs reports",
+        "-" * 80,
+    ])
+    if "error" in dt_result:
+        lines.append(f"  ERROR: {dt_result['error']}")
+    else:
+        lines.append(f"  Tournaments in details: {dt_result['details_tournaments']}")
+        lines.append(f"  Tournaments in reports: {dt_result['reports_tournaments']}")
+        lines.append(f"  In reports, not in details: {dt_result['in_reports_not_details']}")
+        if dt_result["in_reports_not_details"] > 0:
+            lines.append(f"    Sample: {dt_result['sample_in_reports_not_details']}")
+        lines.append(f"  In details, not in reports: {dt_result['in_details_not_reports']}")
+        if dt_result["in_details_not_reports"] > 0:
+            lines.append(f"    Sample: {dt_result['sample_in_details_not_reports']}")
+        lines.append(f"  Player count mismatches: {dt_result['player_count_mismatches']}")
+        if dt_result["player_count_mismatches"] > 0:
+            for m in dt_result["sample_count_mismatches"]:
+                lines.append(
+                    f"    {m['tournament_code']}: details={m['details_count']} "
+                    f"reports={m['reports_count']} (diff={m['diff']})"
+                )
+        lines.append(f"  Date consistency issues: {dt_result['date_issues']}")
+        if dt_result["date_issues"] > 0:
+            for d in dt_result["sample_date_issues"]:
+                lines.append(f"    {d['tournament_code']}: {d['issue']}")
+
+    lines.extend([
+        "",
+        "=" * 80,
+        "Validation found issues (see above)" if has_error else "Validation completed - no issues found",
+        "=" * 80,
+    ])
+    text = "\n".join(lines)
+
+    report_dict = {
+        "year": args.year,
+        "month": args.month,
+        "has_issues": has_error,
+        "player_list_vs_reports": pl_result,
+        "details_vs_reports": dt_result,
+    }
+    return text, report_dict
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description="Validate FIDE pipeline data consistency"
@@ -208,7 +303,28 @@ def main() -> int:
         default="",
         help="Override player list path (default: src/data/players_list.parquet)",
     )
+    parser.add_argument(
+        "--output",
+        "-o",
+        type=str,
+        default="",
+        help="Report output path (default: data/validation_reports/YYYY_MM.txt)",
+    )
+    parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Also write machine-readable JSON report (same path with .json extension)",
+    )
+    parser.add_argument(
+        "--quiet",
+        "-q",
+        action="store_true",
+        help="Reduce log output",
+    )
     args = parser.parse_args()
+
+    if args.quiet:
+        logging.getLogger().setLevel(logging.WARNING)
 
     base = Path(__file__).resolve().parent.parent
     month_key = f"{args.year}_{args.month:02d}"
@@ -222,71 +338,48 @@ def main() -> int:
     details_path = base / args.data_dir / "tournament_details" / f"{month_key}.parquet"
     reports_path = base / args.data_dir / "tournament_reports" / f"{month_key}_games.parquet"
 
-    print("=" * 80)
-    print("FIDE Pipeline Validation")
-    print("=" * 80)
-    print(f"Year: {args.year}, Month: {args.month}")
-    print(f"Details: {details_path}")
-    print(f"Reports: {reports_path}")
-    print(f"Players: {players_path}")
-    print()
+    logger.info("Validating year=%s month=%s", args.year, args.month)
 
     has_error = False
 
     # 1. Player list vs reports
-    print("-" * 80)
-    print("1. Player list vs reports")
-    print("-" * 80)
     pl_result = validate_player_list_vs_reports(players_path, reports_path)
     if "error" in pl_result:
-        print(f"  ERROR: {pl_result['error']}")
+        logger.error("Player list vs reports: %s", pl_result["error"])
         has_error = True
-    else:
-        print(f"  Players in list: {pl_result['total_in_player_list']}")
-        print(f"  Unique players in reports: {pl_result['total_in_reports']}")
-        print(f"  Missing from player list: {pl_result['missing_in_player_list']}")
-        if pl_result["missing_in_player_list"] > 0:
-            print(f"  Sample missing IDs: {pl_result['sample_missing']}")
-            has_error = True
+    elif pl_result["missing_in_player_list"] > 0:
+        has_error = True
 
     # 2. Details vs reports
-    print()
-    print("-" * 80)
-    print("2. Tournament details vs reports")
-    print("-" * 80)
     dt_result = validate_details_vs_reports(details_path, reports_path)
     if "error" in dt_result:
-        print(f"  ERROR: {dt_result['error']}")
+        logger.error("Details vs reports: %s", dt_result["error"])
         has_error = True
-    else:
-        print(f"  Tournaments in details: {dt_result['details_tournaments']}")
-        print(f"  Tournaments in reports: {dt_result['reports_tournaments']}")
-        print(f"  In reports, not in details: {dt_result['in_reports_not_details']}")
-        if dt_result["in_reports_not_details"] > 0:
-            print(f"    Sample: {dt_result['sample_in_reports_not_details']}")
-        print(f"  In details, not in reports: {dt_result['in_details_not_reports']}")
-        if dt_result["in_details_not_reports"] > 0:
-            print(f"    Sample: {dt_result['sample_in_details_not_reports']}")
-        print(f"  Player count mismatches: {dt_result['player_count_mismatches']}")
-        if dt_result["player_count_mismatches"] > 0:
-            for m in dt_result["sample_count_mismatches"]:
-                print(f"    {m['tournament_code']}: details={m['details_count']} reports={m['reports_count']} (diff={m['diff']})")
-            has_error = True
-        print(f"  Date consistency issues: {dt_result['date_issues']}")
-        if dt_result["date_issues"] > 0:
-            for d in dt_result["sample_date_issues"]:
-                print(f"    {d['tournament_code']}: {d['issue']}")
-            has_error = True
+    elif (
+        dt_result["player_count_mismatches"] > 0
+        or dt_result["date_issues"] > 0
+    ):
+        has_error = True
 
-    print()
-    print("=" * 80)
+    # Build and write report
+    text, report_dict = _format_report(base, args, pl_result, dt_result, has_error)
+
+    output_path = Path(args.output) if args.output else base / args.data_dir / "validation_reports" / f"{month_key}.txt"
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(text, encoding="utf-8")
+    logger.info("Wrote validation report to %s", output_path)
+
+    if args.json:
+        json_path = output_path.with_suffix(".json")
+        with open(json_path, "w", encoding="utf-8") as f:
+            json.dump(report_dict, f, indent=2, default=str)
+        logger.info("Wrote JSON report to %s", json_path)
+
     if has_error:
-        print("Validation found issues (see above)")
+        logger.warning("Validation found issues; see report at %s", output_path)
     else:
-        print("Validation completed - no issues found")
-    print("=" * 80)
+        logger.info("Validation completed - no issues found")
 
-    # Exit 0 - validation is informational; pipeline still succeeds
     return 0
 
 

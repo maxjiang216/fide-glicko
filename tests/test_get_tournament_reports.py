@@ -112,6 +112,14 @@ class TestParseDetailsDateToIso:
         assert parse_details_date_to_iso("2024-13-01") is None  # invalid month
         assert parse_details_date_to_iso("2024-12-32") is None  # invalid day
 
+    def test_accepts_datetime_and_timestamp(self):
+        from datetime import datetime
+        import pandas as pd
+        dt = datetime(2024, 12, 30)
+        assert parse_details_date_to_iso(dt) == "2024-12-30"
+        ts = pd.Timestamp("2024-01-15")
+        assert parse_details_date_to_iso(ts) == "2024-01-15"
+
 
 class TestInferDateFormat:
     """Tests for infer_date_format()."""
@@ -419,7 +427,6 @@ class TestFixtureBasedParsing:
         first = report["players"][0]
         assert first["id"] == "24175439"
         assert "Esipenko" in first["name"]
-        assert first["rating"] == 2681
         assert first["total"] == 9.0
 
         # Rounds 1-2 were forfeit-without-opponent (byes) - not added to rounds.
@@ -558,7 +565,7 @@ class TestFixtureBasedParsing:
         assert len(report["players"]) > 0
 
         player = report["players"][0]
-        required = {"id", "name", "country", "rating", "total", "rounds"}
+        required = {"id", "name", "country", "total", "rounds"}
         assert required <= set(
             player.keys()
         ), f"Missing keys: {required - set(player.keys())}"

@@ -1,12 +1,74 @@
 """Tests for get_tournaments scraper."""
 
 import asyncio
+import tempfile
+from pathlib import Path
 
 import pytest
 
 aiohttp = pytest.importorskip("aiohttp")
 
-from get_tournaments import fetch_federation_tournaments
+from get_tournaments import (
+    fetch_federation_tournaments,
+    is_valid_tournament_id,
+    read_federations,
+)
+
+
+class TestValidationHelpers:
+    """Tests for validation helpers."""
+
+    def test_is_valid_tournament_id_numeric(self):
+        assert is_valid_tournament_id("123456") is True
+        assert is_valid_tournament_id("399495") is True
+
+    def test_is_valid_tournament_id_non_numeric(self):
+        assert is_valid_tournament_id("abc") is False
+        assert is_valid_tournament_id("12a34") is False
+        assert is_valid_tournament_id("") is False
+        assert is_valid_tournament_id("  ") is False
+
+
+class TestReadFederations:
+    """Tests for read_federations()."""
+
+    def test_empty_file_raises(self):
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".csv", delete=False, newline=""
+        ) as f:
+            f.write("code,name\n")
+            path = Path(f.name)
+        try:
+            with pytest.raises(ValueError, match="empty or has no valid"):
+                read_federations(path)
+        finally:
+            path.unlink()
+
+    def test_headers_only_raises(self):
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".csv", delete=False, newline=""
+        ) as f:
+            f.write("code,name\n")
+            path = Path(f.name)
+        try:
+            with pytest.raises(ValueError, match="empty or has no valid"):
+                read_federations(path)
+        finally:
+            path.unlink()
+
+    def test_valid_federations(self):
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".csv", delete=False, newline=""
+        ) as f:
+            f.write("code,name\nUSA,United States\nRUS,Russia\n")
+            path = Path(f.name)
+        try:
+            result = read_federations(path)
+            assert len(result) == 2
+            assert result[0] == ("USA", "United States")
+            assert result[1] == ("RUS", "Russia")
+        finally:
+            path.unlink()
 
 
 class TestGetTournaments:

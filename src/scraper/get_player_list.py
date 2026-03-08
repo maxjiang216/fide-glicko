@@ -9,6 +9,9 @@ XML avoids fixed-width ambiguity (e.g. OTIT overflow in TXT).
 
 import argparse
 import csv
+import logging
+import signal
+import sys
 from collections import Counter
 import datetime
 import json
@@ -22,6 +25,15 @@ from typing import Any
 
 import pandas as pd
 import requests
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(levelname)s - %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+)
+logger = logging.getLogger(__name__)
+
+_shutdown_state = {}
 
 # Combined list STD, BLZ, RPD - XML format
 DOWNLOAD_URL = "https://ratings.fide.com/download/players_list_xml.zip"
@@ -238,7 +250,14 @@ def _process_zip_internal(zip_bytes: bytes) -> tuple[list[dict[str, Any]], dict[
         xml_name = next((n for n in names if n.endswith(".xml")), names[0])
         with zf.open(xml_name) as f:
             xml_content = f.read()
-    players, parse_stats = parse_xml_content(xml_content)
+    if not xml_content or len(xml_content) < 100:
+        raise ValueError(
+            "XML content is empty or too small; file may be corrupted or incomplete"
+        )
+    try:
+        players, parse_stats = parse_xml_content(xml_content)
+    except ET.ParseError as e:
+        raise ValueError(f"XML parse failed (malformed XML): {e}") from e
     return players, parse_stats, xml_content
 
 
@@ -521,7 +540,10 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    verbose = not args.quiet
+    if args.quiet:
+        logging.getLogger().setLevel(logging.WARNING)
+    else:
+        logging.getLogger().setLevel(logging.INFO)
 
     # Output paths: src/data (data folder in src)
     src_dir = Path(__file__).resolve().parent.parent
@@ -537,52 +559,63 @@ def main() -> int:
     federations_path = Path(args.federations) if args.federations else repo_root / "data" / "federations.csv"
 
     if parquet_path.exists() and not args.override:
-        if verbose:
-            print(f"File {parquet_path} already exists. Use --override to replace.")
+        logger.info("File %s already exists. Use --override to replace.", parquet_path)
         return 0
 
-    if verbose:
-        print("Downloading FIDE players list...")
+    def _save_results(players, parse_stats, xml_content):
+        """Write all output files."""
+        df = pd.DataFrame(players)
+        if df.empty:
+            logger.warning("No players to save")
+            return
+        df = df[["byear", "id", "fed", "name", "sex", "title", "w_title"]]
+        df.to_parquet(parquet_path, index=False)
+        with open(xml_path, "wb") as f:
+            f.write(xml_content)
+        sample = players[:100]
+        with open(json_sample_path, "w", encoding="utf-8") as f:
+            json.dump(sample, f, indent=2, default=str)
+        report = build_report(players, parse_stats, federations_path)
+        with open(report_path, "w", encoding="utf-8") as f:
+            json.dump(report, f, indent=2, default=str)
+        logger.info("Saved parquet: %s", parquet_path)
+        logger.info("Saved XML: %s", xml_path)
+        logger.info("Saved JSON sample: %s", json_sample_path)
+        logger.info("Saved report: %s", report_path)
+
+    def _graceful_shutdown(signum, frame):
+        logger.warning("\nReceived interrupt, attempting graceful shutdown...")
+        state = _shutdown_state.get("state")
+        if state:
+            players, parse_stats, xml_content = state
+            if players:
+                _save_results(players, parse_stats, xml_content)
+        sys.exit(130 if signum == 2 else 0)
+
+    signal.signal(signal.SIGINT, _graceful_shutdown)
+    signal.signal(signal.SIGTERM, _graceful_shutdown)
+
+    logger.info("Downloading FIDE players list...")
     start = time.time()
 
     try:
         zip_bytes = download_player_list()
         players, parse_stats, xml_content = _process_zip_internal(zip_bytes)
     except Exception as e:
-        print(f"Error: {e}")
+        logger.error("Error: %s", e)
         return 1
 
+    if not players:
+        logger.error("No players parsed from XML")
+        return 1
+
+    _shutdown_state["state"] = (players, parse_stats, xml_content)
     elapsed = time.time() - start
-    if verbose:
-        print(f"Downloaded and parsed {len(players)} players in {elapsed:.1f}s")
+    logger.info("Downloaded and parsed %d players in %.1fs", len(players), elapsed)
 
-    df = pd.DataFrame(players)
-    # Enforce column order: byear, id, fed, name, sex, title, w_title
-    df = df[["byear", "id", "fed", "name", "sex", "title", "w_title"]]
-
-    # Write parquet with appropriate dtypes
-    df.to_parquet(parquet_path, index=False)
-
-    # Write raw XML
-    with open(xml_path, "wb") as f:
-        f.write(xml_content)
-
-    # JSON sample: first 100 rows
-    sample = players[:100]
-    with open(json_sample_path, "w", encoding="utf-8") as f:
-        json.dump(sample, f, indent=2, default=str)
-
-    # Build and write report
-    report = build_report(players, parse_stats, federations_path)
-    with open(report_path, "w", encoding="utf-8") as f:
-        json.dump(report, f, indent=2, default=str)
-
-    if verbose:
-        print(f"Saved parquet: {parquet_path}")
-        print(f"Saved XML: {xml_path}")
-        print(f"Saved JSON sample: {json_sample_path}")
-        print(f"Saved report: {report_path}")
-        print(f"Sample row keys: {list(sample[0].keys())}")
+    _save_results(players, parse_stats, xml_content)
+    if players:
+        logger.info("Sample row keys: %s", list(players[0].keys()))
 
     return 0
 

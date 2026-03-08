@@ -20,6 +20,7 @@ import argparse
 import asyncio
 import csv
 import json
+import logging
 import random
 import subprocess
 import sys
@@ -30,6 +31,13 @@ from pathlib import Path
 
 import aiohttp
 import pandas as pd
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(levelname)s - %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+)
+logger = logging.getLogger(__name__)
 
 # Paths
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -272,52 +280,61 @@ def main() -> int:
         default="",
         help="Resume from this month (YYYY-MM). Process this month and older only. E.g. --start-from 2007-01",
     )
+    parser.add_argument(
+        "--test",
+        action="store_true",
+        help="Quick smoke run: limit-months=2, countries=3",
+    )
     args = parser.parse_args()
+    if args.test:
+        if args.limit_months == 0:
+            args.limit_months = 2
+        args.countries = min(args.countries, 3)
+        logger.info("[TEST MODE] limit-months=2, countries=3")
     random.seed(args.seed)
 
     report_path = Path(args.report) if args.report else REPO_ROOT / args.data_dir / "pipeline_test_report.txt"
     report_path.parent.mkdir(parents=True, exist_ok=True)
 
-    print("=" * 80)
-    print("FIDE Pipeline Historical Run")
-    print("=" * 80)
-    sys.stdout.flush()
+    logger.info("=" * 80)
+    logger.info("FIDE Pipeline Historical Run")
+    logger.info("=" * 80)
 
     # 1. Get federations
     fed_path = REPO_ROOT / args.data_dir / "federations.csv"
     if not fed_path.exists():
-        print("Fetching federations...")
+        logger.info("Fetching federations...")
         ok, err = run_cmd([sys.executable, str(SCRAPER / "get_federations.py"), "--directory", args.data_dir])
         if not ok:
-            print(f"ERROR: {err}")
+            logger.error("%s", err)
             return 1
-        print("  Done.")
+        logger.info("  Done.")
     federations = read_federations(fed_path)
     if not federations:
-        print("ERROR: No federations loaded")
+        logger.error("No federations loaded")
         return 1
-    print(f"Federations: {len(federations)}")
+    logger.info("Federations: %d", len(federations))
 
     # 2. Get player list
     players_path = REPO_ROOT / "src" / "data" / "players_list.parquet"
     if not players_path.exists():
-        print("Fetching player list...")
+        logger.info("Fetching player list...")
         ok, err = run_cmd([sys.executable, str(SCRAPER / "get_player_list.py")], timeout=300)
         if not ok:
-            print(f"ERROR: {err}")
+            logger.error("%s", err)
             return 1
-        print("  Done.")
-    print(f"Player list: {players_path}")
+        logger.info("  Done.")
+    logger.info("Player list: %s", players_path)
 
     # 3. Discover months
-    print("Discovering available months...")
+    logger.info("Discovering available months...")
     async def _discover():
         async with aiohttp.ClientSession() as session:
             return await fetch_available_periods(session)
 
     periods = asyncio.run(_discover())
     if not periods:
-        print("ERROR: Could not fetch periods. Using fallback range (2002-04 to now).")
+        logger.warning("Could not fetch periods. Using fallback range (2002-04 to now).")
         from datetime import date
         today = date.today()
         periods = []
@@ -332,20 +349,20 @@ def main() -> int:
     # Skip future months (API may return them but data not yet available)
     today = datetime.now().date()
     periods = [(y, m) for y, m in periods if y < today.year or (y == today.year and m <= today.month)]
-    print(f"  Found {len(periods)} periods (most recent first, future months excluded)")
+    logger.info("Found %d periods (most recent first, future months excluded)", len(periods))
 
     if args.start_from:
         try:
             sy, sm = map(int, args.start_from.split("-"))
             if 1 <= sm <= 12:
                 periods = [(y, m) for y, m in periods if (y, m) <= (sy, sm)]
-                print(f"  Starting from {args.start_from} ({len(periods)} months)")
+                logger.info("Starting from %s (%d months)", args.start_from, len(periods))
         except ValueError:
-            print(f"  Warning: invalid --start-from {args.start_from}, ignoring")
+            logger.warning("Invalid --start-from %s, ignoring", args.start_from)
 
     if args.limit_months > 0:
         periods = periods[: args.limit_months]
-        print(f"  Limited to first {args.limit_months} months")
+        logger.info("Limited to first %d months", args.limit_months)
 
     # 4. Run pipeline for each month
     results: list[MonthResult] = []
@@ -355,7 +372,8 @@ def main() -> int:
     for idx, (year, month) in enumerate(periods):
         t0 = time.perf_counter()
         month_key = f"{year}_{month:02d}"
-        print(f"\n--- [{idx+1}/{len(periods)}] {year}-{month:02d} ---", flush=True)
+        logger.info("")
+        logger.info("--- [%d/%d] %d-%02d ---", idx + 1, len(periods), year, month)
 
         res = MonthResult(year=year, month=month, period=f"{year}-{month:02d}", tournaments_fetched=0,
                           tournaments_with_details=0, tournaments_with_reports=0, games_count=0,
@@ -364,12 +382,12 @@ def main() -> int:
         # Fetch tournaments via get_tournaments.py (same logic as src/scraper, limited federations)
         test_dir = REPO_ROOT / args.data_dir / "pipeline_test"
         test_dir.mkdir(parents=True, exist_ok=True)
-        print(f"  Running get_tournaments.py ({args.countries} federations)...", flush=True)
+        logger.info("Running get_tournaments.py (%d federations)...", args.countries)
         tournament_ids, ok_fetch, err_fetch = fetch_tournaments_via_script(
             federations, year, month, args.countries, test_dir, args.data_dir
         )
         res.tournaments_fetched = len(tournament_ids)
-        print(f"  Found {len(tournament_ids)} tournaments", flush=True)
+        logger.info("Found %d tournaments", len(tournament_ids))
 
         if not ok_fetch:
             res.tournaments_failed = True
@@ -378,7 +396,7 @@ def main() -> int:
             results.append(res)
             res.elapsed_seconds = time.perf_counter() - t0
             times_per_month.append(res.elapsed_seconds)
-            print(f"  FAILED get_tournaments: {err_fetch[:120]}", flush=True)
+            logger.error("FAILED get_tournaments: %s", err_fetch[:120])
             continue
 
         if not tournament_ids:
@@ -386,13 +404,13 @@ def main() -> int:
             results.append(res)
             res.elapsed_seconds = time.perf_counter() - t0
             times_per_month.append(res.elapsed_seconds)
-            print(f"  No tournaments, skipping", flush=True)
+            logger.warning("No tournaments, skipping")
             continue
 
         # Write sampled IDs (1 per fed, up to count) for details/reports - overwrite full output
         ids_file = test_dir / f"tournament_ids_{month_key}"
         ids_file.write_text("\n".join(tournament_ids), encoding="utf-8")
-        print(f"  Using {len(tournament_ids)} tournament IDs (1 per federation)", flush=True)
+        logger.info("Using %d tournament IDs (1 per federation)", len(tournament_ids))
 
         details_out = test_dir / "details" / f"{month_key}.parquet"
         details_out.parent.mkdir(parents=True, exist_ok=True)
@@ -401,7 +419,7 @@ def main() -> int:
         reports_games_out = test_dir / "reports" / f"{month_key}_games.parquet"
 
         # Run details
-        print(f"  Running get_tournament_details.py...", flush=True)
+        logger.info("Running get_tournament_details.py...")
         ok, err = run_cmd([
             sys.executable, str(SCRAPER / "get_tournament_details.py"),
             "--input", str(ids_file),
@@ -412,14 +430,14 @@ def main() -> int:
             res.details_failed = True
             res.details_error = err
             res.errors.append(f"get_tournament_details: {err}")
-            print(f"  FAILED get_tournament_details: {err[:120]}", flush=True)
+            logger.error("FAILED get_tournament_details: %s", err[:120])
         elif details_out.exists():
             df = pd.read_parquet(details_out)
             res.tournaments_with_details = int((df["success"] == True).sum())
-            print(f"  get_tournament_details OK ({res.tournaments_with_details} tournaments)", flush=True)
+            logger.info("get_tournament_details OK (%d tournaments)", res.tournaments_with_details)
 
         # Run reports
-        print(f"  Running get_tournament_reports.py...", flush=True)
+        logger.info("Running get_tournament_reports.py...")
         details_path_arg = str(details_out) if details_out.exists() else ""
         reports_cmd = [
             sys.executable, str(SCRAPER / "get_tournament_reports.py"),
@@ -434,17 +452,17 @@ def main() -> int:
             res.reports_failed = True
             res.reports_error = err
             res.errors.append(f"get_tournament_reports: {err}")
-            print(f"  FAILED get_tournament_reports: {err[:120]}", flush=True)
+            logger.error("FAILED get_tournament_reports: %s", err[:120])
         elif reports_games_out.exists():
             rp = pd.read_parquet(reports_games_out)
             tc_col = "tournament_id" if "tournament_id" in rp.columns else "tournament_code"
             if tc_col in rp.columns:
                 res.tournaments_with_reports = rp[tc_col].nunique()
             res.games_count = len(rp)
-            print(f"  get_tournament_reports OK ({res.games_count} games)", flush=True)
+            logger.info("get_tournament_reports OK (%d games)", res.games_count)
 
         # Validate: players in list
-        print(f"  Validating players...", flush=True)
+        logger.info("Validating players...")
         res.players_in_reports, res.players_missing_from_list, res.sample_missing_ids = validate_players_in_list(
             players_path, reports_games_out
         )
@@ -460,11 +478,18 @@ def main() -> int:
         avg_time = sum(times_per_month) / len(times_per_month)
         remaining = len(periods) - idx - 1
         est_remaining = avg_time * remaining
-        print(f"  Summary: {res.tournaments_fetched} fetched, {res.tournaments_with_details} details, {res.tournaments_with_reports} reports", flush=True)
-        print(f"  Games: {res.games_count} | Players: {res.players_in_reports} in reports, {res.players_missing_from_list} missing from list", flush=True)
+        logger.info(
+            "Summary: %d fetched, %d details, %d reports | Games: %d | Players: %d in reports, %d missing",
+            res.tournaments_fetched,
+            res.tournaments_with_details,
+            res.tournaments_with_reports,
+            res.games_count,
+            res.players_in_reports,
+            res.players_missing_from_list,
+        )
         if res.errors:
-            print(f"  FAILURES: {res.errors}", flush=True)
-        print(f"  Elapsed: {res.elapsed_seconds:.1f}s | Est. remaining: {est_remaining/60:.1f}m", flush=True)
+            logger.warning("FAILURES: %s", res.errors)
+        logger.info("Elapsed: %.1fs | Est. remaining: %.1fm", res.elapsed_seconds, est_remaining / 60)
 
     total_elapsed = time.perf_counter() - total_start
 
@@ -557,9 +582,10 @@ def main() -> int:
             if r.errors:
                 f.write(f"  All errors: {r.errors}\n")
 
-    print("\n" + "=" * 80)
-    print(f"Report written to: {report_path}")
-    print("=" * 80)
+    logger.info("")
+    logger.info("=" * 80)
+    logger.info("Report written to: %s", report_path)
+    logger.info("=" * 80)
 
     return 0
 
