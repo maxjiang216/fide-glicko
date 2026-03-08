@@ -80,13 +80,7 @@ The project includes Python scripts for scraping tournament data from the FIDE w
    ```bash
    uv run scripts/run_full_pipeline.py --year 2025 --month 12
    ```
-   Runs federations → tournaments → details → reports → player list, then validates player list vs reports and tournament details vs reports. Use `--skip-validation`, `--skip-federations`, or `--skip-player-list` to skip steps. Use `--limit N` to process only the first N tournaments (for testing).
-
-**Historical pipeline test** (detect format changes across months):
-   ```bash
-   uv run scripts/pipeline_historical.py --countries 10
-   ```
-   Discovers available months via the FIDE periods API, samples N random federations per month (1 tournament each), runs details+reports, validates against the player list, and writes `data/pipeline_test_report.txt` with anomalies. Use `--limit-months 5` for a quick run.
+   See [scripts/README.md](scripts/README.md) for details.
 
 The scraper outputs data in efficient Parquet format with JSON samples for quick inspection. See the [scraper README](src/scraper/README.md) for complete documentation.
 

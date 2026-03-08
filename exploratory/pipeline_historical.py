@@ -10,10 +10,10 @@ Month discovery: a_tournaments_panel.php?country=RUS&periods_tab=1 returns JSON 
 frl_publish (YYYY-MM-01). If that fails, falls back to fixed range 2002-04 to now.
 
 Usage:
-  python scripts/pipeline_historical.py [--countries 10] [--limit-months 5]
+  python exploratory/pipeline_historical.py [--countries 10] [--limit-months 5]
 
   # Quick smoke run (2 months, 3 countries):
-  python scripts/pipeline_historical.py --limit-months 2 --countries 3
+  python exploratory/pipeline_historical.py --limit-months 2 --countries 3
 """
 
 import argparse

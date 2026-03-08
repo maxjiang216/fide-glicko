@@ -217,7 +217,7 @@ def main() -> int:
     if not args.skip_validation:
         validate_cmd = [
             sys.executable,
-            str(SCRIPTS_DIR / "validate_pipeline.py"),
+            str(SCRIPTS_DIR.parent / "exploratory" / "validate_pipeline.py"),
             "--year", str(args.year),
             "--month", str(args.month),
             "--data-dir", data_dir,
