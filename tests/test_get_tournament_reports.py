@@ -17,6 +17,8 @@ from get_tournament_reports import (
     parse_details_date_to_iso,
     parse_round_date,
     parse_score,
+    results_to_games_dataframe,
+    results_to_players_dataframe,
 )
 
 
@@ -109,6 +111,15 @@ class TestParseDetailsDateToIso:
         assert parse_details_date_to_iso("not-a-date") is None
         assert parse_details_date_to_iso("2024-13-01") is None  # invalid month
         assert parse_details_date_to_iso("2024-12-32") is None  # invalid day
+
+    def test_accepts_datetime_and_timestamp(self):
+        from datetime import datetime
+        import pandas as pd
+
+        dt = datetime(2024, 12, 30)
+        assert parse_details_date_to_iso(dt) == "2024-12-30"
+        ts = pd.Timestamp("2024-01-15")
+        assert parse_details_date_to_iso(ts) == "2024-01-15"
 
 
 class TestInferDateFormat:
@@ -417,38 +428,96 @@ class TestFixtureBasedParsing:
         first = report["players"][0]
         assert first["id"] == "24175439"
         assert "Esipenko" in first["name"]
-        assert first["rating"] == 2681
         assert first["total"] == 9.0
 
-        # Round 1 and 2 are forfeits (opponent no-show)
+        # Rounds 1-2 were forfeit-without-opponent (byes) - not added to rounds.
+        # First round with opponent is round 3+.
         rounds = first["rounds"]
-        assert len(rounds) >= 2
-        assert rounds[0]["forfeit"] == "-"
-        assert rounds[0]["score"] is None
-        assert rounds[1]["forfeit"] == "-"
+        assert len(rounds) >= 1
+        # All rounds in output must have opp_id (forfeit-without-opponent are skipped)
+        for r in rounds:
+            assert r.get(
+                "opp_id"
+            ), "All rounds must have opponent (forfeit-without-opponent skipped)"
 
-        # Round 3+ have real games (e.g. vs Abasov)
-        game_rounds = [
-            r for r in rounds if r.get("opp_name") and "Abasov" in r.get("opp_name", "")
-        ]
+        # Round 3+ have real games (opp_id present, score/forfeit from actual play)
+        game_rounds = [r for r in rounds if r.get("opp_id") and r.get("forfeit") == ""]
         assert len(game_rounds) >= 1
         assert game_rounds[0]["score"] == 1.0
         assert game_rounds[0]["color"] in ("white", "black")
 
-        # Byes check: players with rating >= 2662 had byes in rounds 1-2.
-        # Ensure they were not incorrectly turned into games in the final output.
+        # Esipenko had byes in rounds 1-2 (forfeit-without-opponent) - those rounds are not
+        # in his rounds list. Other players played in rounds 1-2, so games exist for those rounds.
+
+    def test_418871_forfeit_without_opponent_produces_no_game(self):
+        """
+        Tournament 418871 (Blitz Playoff): forfeit rounds with no opponent (empty href)
+        must NOT produce games. Only rounds with opp_id produce games.
+        """
+        fixture_path = (
+            Path(__file__).parent / "fixtures" / "blitz_playoff_418871_report.html"
+        )
+        fixture_html = fixture_path.read_bytes()
+
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.content = fixture_html
+
+        session = MagicMock()
+        session.get.return_value = mock_response
+
+        report, error, _ = fetch_tournament_report("418871", session)
+
+        assert error is None
+        assert report is not None
+        assert report["tournament_code"] == "418871"
+
+        # Forfeit-without-opponent rounds should not be in player rounds (we only add when has_opponent)
         result = {**report, "success": True}
         flattened = flatten_result(result)
-        games = flatten_to_games(flattened, tournament_code="449502")
-        high_rated_ids = {p["id"] for p in report["players"] if p["rating"] >= 2662}
-        round_1_2_games = [g for g in games if g["round"] in (1, 2)]
-        for g in round_1_2_games:
-            assert (
-                g["white_id"] not in high_rated_ids
-            ), f"High-rated player {g['white_id']} should not have a game in round {g['round']} (bye)"
-            assert (
-                g["black_id"] not in high_rated_ids
-            ), f"High-rated player {g['black_id']} should not have a game in round {g['round']} (bye)"
+        games = flatten_to_games(flattened, tournament_code="418871")
+
+        # Expected: 3 games (r1 Pragg-Firouzja, r2 Firouzja-MVL, r3 Pragg-MVL).
+        # Forfeit-without-opponent rounds (Pragg r2, Firouzja r3, MVL r1) must NOT produce games.
+        assert len(games) == 3
+        rounds = {g["round"] for g in games}
+        assert rounds == {1, 2, 3}
+
+    def test_397341_forfeit_with_opponent_produces_game(self):
+        """
+        Tournament 397341 (World Blitz): Niemann-Dubov round 10 forfeit WITH opponent
+        must produce a game with forfeit=True. Niemann had Forfeit (+) (won), Dubov had Forfeit (-).
+        """
+        fixture_path = (
+            Path(__file__).parent / "fixtures" / "world_blitz_397341_report.html"
+        )
+        fixture_html = fixture_path.read_bytes()
+
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.content = fixture_html
+
+        session = MagicMock()
+        session.get.return_value = mock_response
+
+        report, error, _ = fetch_tournament_report("397341", session)
+
+        assert error is None
+        assert report is not None
+        assert report["tournament_code"] == "397341"
+
+        result = {**report, "success": True}
+        flattened = flatten_result(result)
+        games = flatten_to_games(flattened, tournament_code="397341")
+
+        # One game: Niemann (2093596) vs Dubov (24126055), round 10, forfeit
+        assert len(games) == 1
+        g = games[0]
+        assert g["round"] == 10
+        assert g["forfeit"] is True
+        assert set([g["white_id"], g["black_id"]]) == {"2093596", "24126055"}
+        # Niemann won (forfeit +), so if Niemann was white: white_score=1.0, else 0.0
+        assert g["white_score"] in (0.0, 1.0)
 
     @pytest.mark.online
     def test_live_fetch_matches_fixture(self):
@@ -503,7 +572,7 @@ class TestFixtureBasedParsing:
         assert len(report["players"]) > 0
 
         player = report["players"][0]
-        required = {"id", "name", "country", "rating", "total", "rounds"}
+        required = {"id", "name", "country", "total", "rounds"}
         assert required <= set(
             player.keys()
         ), f"Missing keys: {required - set(player.keys())}"

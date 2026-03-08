@@ -11,6 +11,8 @@ from get_player_list import (
     process_zip,
     get_player_list,
     download_player_list,
+    build_report,
+    _process_zip_internal,
 )
 
 
@@ -43,7 +45,7 @@ class TestParsePlayerList:
 <flag></flag>
 </player>
 </playerslist>"""
-        players = parse_xml_content(xml)
+        players, _ = parse_xml_content(xml)
         assert len(players) == 1
         assert players[0]["id"] == 10292519
         assert players[0]["name"] == "A A M Imtiaz, Chowdhury"
@@ -64,10 +66,30 @@ class TestParsePlayerList:
 <birthday>1990</birthday>
 </player>
 </playerslist>"""
-        players = parse_xml_content(xml)
+        players, _ = parse_xml_content(xml)
         assert len(players) == 1
         assert players[0]["fed"] == "USA"
         assert players[0]["title"] == "GM"
+        assert players[0]["w_title"] is None
+
+    def test_parse_xml_content_womens_title_in_title_goes_to_w_title(self):
+        """When XML has women's title (e.g. wgm) in title and w_title empty, it goes to w_title."""
+        xml = b"""<?xml version="1.0"?>
+<playerslist>
+<player>
+<fideid>12345</fideid>
+<name>WGM Player</name>
+<country>RUS</country>
+<sex>F</sex>
+<title>wg</title>
+<w_title></w_title>
+<birthday>1995</birthday>
+</player>
+</playerslist>"""
+        players, _ = parse_xml_content(xml)
+        assert len(players) == 1
+        assert players[0]["title"] is None  # open title blank
+        assert players[0]["w_title"] == "WGM"
 
     def test_parse_xml_content_skips_invalid_id(self):
         """Players with invalid fideid are skipped."""
@@ -80,7 +102,7 @@ class TestParsePlayerList:
 <birthday>1990</birthday>
 </player>
 </playerslist>"""
-        players = parse_xml_content(xml)
+        players, _ = parse_xml_content(xml)
         assert len(players) == 0
 
     def test_parse_xml_content_processes_multiple_players(self):
@@ -90,7 +112,7 @@ class TestParsePlayerList:
 <player><fideid>10292519</fideid><name>Player One</name><country>BAN</country><sex>M</sex><birthday>1975</birthday></player>
 <player><fideid>537001345</fideid><name>A Arbhin Vanniarajan</name><country>IND</country><sex>M</sex><birthday>2010</birthday></player>
 </playerslist>"""
-        players = parse_xml_content(xml)
+        players, _ = parse_xml_content(xml)
         assert len(players) == 2
         assert players[0]["id"] == 10292519
         assert players[0]["byear"] == 1975
@@ -122,6 +144,25 @@ class TestParsePlayerList:
         assert players[0]["title"] == "GM"
         assert players[0]["byear"] == 1990
 
+    def test_build_report_produces_expected_structure(self):
+        """Report contains players_found, xml_fields_found, odd_by_column, etc."""
+        xml = b"""<?xml version="1.0"?>
+<playerslist>
+<player><fideid>1</fideid><name>Alice</name><country>USA</country><sex>F</sex><birthday>1990</birthday></player>
+<player><fideid>2</fideid><name>Bob</name><country>USA</country><sex>M</sex><birthday>1985</birthday></player>
+</playerslist>"""
+        players, parse_stats = parse_xml_content(xml)
+        report = build_report(players, parse_stats, federations_path=None)
+        assert report["players_found"] == 2
+        assert "xml_fields_found" in report
+        assert "birthday" in report["xml_fields_found"]
+        assert report["odd_by_column"]["id"] == 0
+        assert report["byear_min"] == 1985
+        assert report["byear_max"] == 1990
+        assert report["sex_counts"]["M"] == 1
+        assert report["sex_counts"]["F"] == 1
+        assert "nulls_by_column" in report
+
 
 class TestGetPlayerListOnline:
     """Online tests - run with pytest -m online."""
@@ -148,7 +189,7 @@ class TestGetPlayerListOnline:
         players = get_player_list()
         assert len(players) > 100_000
         p = players[0]
-        required = {"id", "name", "byear", "sex", "fed", "title"}
+        required = {"id", "name", "byear", "sex", "fed", "title", "w_title"}
         assert required <= set(p.keys()), f"Missing keys: {required - set(p.keys())}"
         assert isinstance(p["id"], int)
         assert p["name"]
@@ -165,10 +206,8 @@ class TestGetPlayerListOnline:
         assert len(players) > 0
 
         current_year = __import__("datetime").datetime.now().year
-        VALID_TITLES = frozenset(
-            {"g", "wg", "m", "wm", "f", "wf", "c", "wc"}
-            | {"gm", "im", "fm", "cm", "wgm", "wim", "wfm", "wcm"}
-        )
+        OPEN_TITLES = frozenset({"GM", "IM", "FM", "CM"})
+        WOMEN_TITLES = frozenset({"WGM", "WIM", "WFM", "WCM"})
 
         for p in players:
             assert isinstance(p["id"], int), f"Invalid id: {p['id']!r}"
@@ -180,8 +219,12 @@ class TestGetPlayerListOnline:
 
             if p.get("title"):
                 assert (
-                    p["title"].lower() in VALID_TITLES
-                ), f"Invalid title: {p['title']!r} for id={p['id']}"
+                    p["title"] in OPEN_TITLES
+                ), f"Invalid title (open only): {p['title']!r} for id={p['id']}"
+            if p.get("w_title"):
+                assert (
+                    p["w_title"] in WOMEN_TITLES
+                ), f"Invalid w_title (women only): {p['w_title']!r} for id={p['id']}"
 
             if p.get("sex") is not None:
                 assert p["sex"] in (

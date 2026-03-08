@@ -5,6 +5,9 @@ Scrape FIDE website to get the list of federations.
 
 import argparse
 import csv
+import logging
+import signal
+import sys
 import time
 from pathlib import Path
 from typing import List, Dict
@@ -13,6 +16,23 @@ import requests
 from bs4 import BeautifulSoup
 
 URL = "https://ratings.fide.com/rated_tournaments.phtml"
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(levelname)s - %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+)
+logger = logging.getLogger(__name__)
+
+# State for graceful shutdown
+_shutdown_state = {"federations": [], "output_file": None, "completed": False}
+
+
+def is_valid_federation_code(code: str) -> bool:
+    """Validate federation code: 3 uppercase letters (A-Z)."""
+    if not code or len(code) != 3:
+        return False
+    return code.isalpha() and code.isupper()
 
 
 def get_federations_with_retries(
@@ -37,20 +57,32 @@ def get_federations_with_retries(
 
             select = soup.find("select", id="select_country")
             if not select:
-                raise RuntimeError("Country selector not found")
+                logger.warning("Country selector not found; returning empty list")
+                return []
 
             federations = []
 
             for option in select.find_all("option"):
-                value = option.get("value")
+                value = (option.get("value") or "").strip()
                 name = option.text.strip()
 
                 # Skip the placeholder option
-                if value and value.lower() != "all":
-                    federations.append({"code": value, "name": name})
+                if not value or value.lower() == "all":
+                    continue
+                # Normalize to uppercase for validation
+                code = value.upper() if len(value) == 3 else value
+                if not is_valid_federation_code(code):
+                    logger.warning(
+                        f"Invalid federation code skipped: {value!r} ({name})"
+                    )
+                    continue
+                federations.append({"code": code, "name": name})
+
+            if not federations:
+                logger.warning("No valid federations found in country selector")
 
             # CGO (Republic of Congo) not on FIDE country selector; add if missing
-            codes = {f["code"].upper() for f in federations}
+            codes = {f["code"] for f in federations}
             if "CGO" not in codes:
                 federations.append({"code": "CGO", "name": "Republic of the Congo"})
                 federations.sort(key=lambda f: f["code"])
@@ -64,7 +96,32 @@ def get_federations_with_retries(
                 raise
 
 
+def _graceful_shutdown(signum: int, frame) -> None:
+    """Save partial results on SIGINT/SIGTERM."""
+    global _shutdown_state
+    logger.warning("\nReceived interrupt, attempting graceful shutdown...")
+    federations = _shutdown_state.get("federations", [])
+    output_file = _shutdown_state.get("output_file")
+    if federations and output_file:
+        try:
+            output_file.parent.mkdir(parents=True, exist_ok=True)
+            with open(output_file, "w", newline="", encoding="utf-8") as f:
+                writer = csv.writer(f)
+                writer.writerow(["code", "name"])
+                for fed in federations:
+                    writer.writerow([fed["code"], fed["name"]])
+            logger.info(f"Saved {len(federations)} federations to {output_file}")
+        except Exception as e:
+            logger.error(f"Error saving partial results: {e}")
+    else:
+        logger.info("No partial results to save")
+    sys.exit(130 if signum == 2 else 0)  # 130 = SIGINT
+
+
 def main():
+    signal.signal(signal.SIGINT, _graceful_shutdown)
+    signal.signal(signal.SIGTERM, _graceful_shutdown)
+
     parser = argparse.ArgumentParser(
         description="Scrape FIDE website to get the list of federations"
     )
@@ -97,11 +154,13 @@ def main():
 
     args = parser.parse_args()
 
-    # Verbose is True by default, unless --quiet is specified
-    verbose = not args.quiet
+    # Log level: DEBUG for verbose, WARNING for quiet
+    if args.quiet:
+        logging.getLogger().setLevel(logging.WARNING)
+    else:
+        logging.getLogger().setLevel(logging.INFO)
 
     # Determine output path (relative to repo root)
-    # From src/scraper/get_federations.py, go up 3 levels to reach repo root
     repo_root = Path(__file__).parent.parent.parent
     output_dir = repo_root / args.directory
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -109,21 +168,28 @@ def main():
 
     # Check if file already exists
     if output_file.exists() and not args.override:
-        print(
-            f"File {output_file} already exists. Use --override to scrape and replace."
+        logger.info(
+            "File %s already exists. Use --override to scrape and replace.",
+            output_file,
         )
         return 0
 
     start_time = time.time()
-
-    if verbose:
-        print("Fetching federations list...")
+    logger.info("Fetching federations list...")
 
     try:
         federations = get_federations_with_retries()
     except Exception as e:
-        print(f"Error fetching federations: {e}")
+        logger.error("Error fetching federations: %s", e)
         return 1
+
+    if not federations:
+        logger.error("No federations retrieved")
+        return 1
+
+    # Store for graceful shutdown
+    _shutdown_state["federations"] = federations
+    _shutdown_state["output_file"] = output_file
 
     elapsed_time = time.time() - start_time
 
@@ -134,19 +200,14 @@ def main():
         for fed in federations:
             writer.writerow([fed["code"], fed["name"]])
 
-    if verbose:
-        # Print all federations
+    if not args.quiet:
         for fed in federations:
-            print(f"{fed['code']}: {fed['name']}")
+            logger.info("%s: %s", fed["code"], fed["name"])
+        logger.info("Found %d federations", len(federations))
+        logger.info("Time taken: %.2f seconds", elapsed_time)
 
-        # Print count
-        print(f"\nFound {len(federations)} federations")
-
-        # Print time taken
-        print(f"Time taken: {elapsed_time:.2f} seconds")
-
-    print(f"Saved {len(federations)} federations to {output_file}")
-
+    logger.info("Saved %d federations to %s", len(federations), output_file)
+    _shutdown_state["completed"] = True
     return 0
 
 

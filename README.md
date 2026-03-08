@@ -76,6 +76,12 @@ The project includes Python scripts for scraping tournament data from the FIDE w
    ```
    The reports scraper reads tournament codes from the details output and extracts game results.
 
+**Full pipeline (all steps + validation):**
+   ```bash
+   uv run scripts/run_full_pipeline.py --year 2025 --month 12
+   ```
+   See [scripts/README.md](scripts/README.md) for details.
+
 The scraper outputs data in efficient Parquet format with JSON samples for quick inspection. See the [scraper README](src/scraper/README.md) for complete documentation.
 
 ## Testing

@@ -72,6 +72,13 @@ def format_time(seconds: float) -> str:
         return f"{hours}h {minutes}m {secs:.1f}s"
 
 
+def is_valid_tournament_id(tournament_id: str) -> bool:
+    """Check if tournament ID is numeric (digits only). IDs are conceptually strings."""
+    if not tournament_id or not str(tournament_id).strip():
+        return False
+    return str(tournament_id).strip().isdigit()
+
+
 def read_federations(federations_path: Path) -> List[Tuple[str, str]]:
     """
     Read federation codes and names from a CSV file.
@@ -84,7 +91,7 @@ def read_federations(federations_path: Path) -> List[Tuple[str, str]]:
 
     Raises:
         FileNotFoundError: If the federations file doesn't exist.
-        ValueError: If the CSV file is malformed.
+        ValueError: If the CSV file is malformed or empty.
     """
     if not federations_path.exists():
         raise FileNotFoundError(f"Federations file not found: {federations_path}")
@@ -92,14 +99,22 @@ def read_federations(federations_path: Path) -> List[Tuple[str, str]]:
     federations = []
     with open(federations_path, "r", encoding="utf-8") as f:
         reader = csv.DictReader(f)
-        if "code" not in reader.fieldnames or "name" not in reader.fieldnames:
+        if (
+            reader.fieldnames is None
+            or "code" not in reader.fieldnames
+            or "name" not in reader.fieldnames
+        ):
             raise ValueError("CSV file must contain 'code' and 'name' columns")
         for row in reader:
-            code = row["code"].strip()
-            name = row["name"].strip()
+            code = (row.get("code") or "").strip()
+            name = (row.get("name") or "").strip()
             if code:  # Skip empty rows
                 federations.append((code, name))
 
+    if not federations:
+        raise ValueError(
+            "Federations file is empty or has no valid rows (code column required)"
+        )
     return federations
 
 
@@ -117,8 +132,11 @@ def parse_tournament_row(row: List, federation: str) -> Optional[Tournament]:
         Tournament object if parsing succeeds, None otherwise.
     """
     try:
-        tournament_id = str(row[0]) if len(row) > 0 else None
+        tournament_id = str(row[0]).strip() if len(row) > 0 else None
         if not tournament_id:
+            return None
+        if not is_valid_tournament_id(tournament_id):
+            logger.warning(f"Non-numeric tournament ID skipped: {tournament_id!r}")
             return None
 
         # Extract name from HTML link: "<a href=\/report.phtml?event=399495>4th Annual Forester Open<\/a>"
@@ -330,7 +348,8 @@ def graceful_shutdown(signum: int, frame) -> None:
             seen_ids.add(t.tournament_id)
             unique_tournaments.append(t)
 
-    unique_tournaments.sort(key=lambda t: int(t.tournament_id))
+    # Sort by ID as string (IDs are kept as strings; numeric IDs sort correctly)
+    unique_tournaments.sort(key=lambda t: t.tournament_id)
 
     # Save partial results (both formats)
     if output_path and unique_tournaments:
@@ -414,6 +433,7 @@ async def scrape_month(
     max_concurrency: int = 20,
     max_retries: int = 3,
     retry_delay: float = 1.0,
+    limit: int = 0,
 ) -> List[Tournament]:
     """
     Scrape all federations for a given month.
@@ -527,8 +547,13 @@ async def scrape_month(
             seen_ids.add(t.tournament_id)
             unique_tournaments.append(t)
 
-    # Sort by ID
-    unique_tournaments.sort(key=lambda t: int(t.tournament_id))
+    # Sort by ID as string (IDs are kept as strings)
+    unique_tournaments.sort(key=lambda t: t.tournament_id)
+
+    # Apply limit if set (for testing)
+    if limit > 0:
+        unique_tournaments = unique_tournaments[:limit]
+        logger.info(f"Limited to first {limit} unique tournaments")
 
     # Prepare JSON data
     output_data = [
@@ -645,6 +670,12 @@ def main() -> int:
     parser.add_argument(
         "--quiet", "-q", action="store_true", help="Disable verbose output"
     )
+    parser.add_argument(
+        "--limit",
+        type=int,
+        default=0,
+        help="Process only first N unique tournaments (for testing; 0 = no limit)",
+    )
 
     args = parser.parse_args()
 
@@ -683,6 +714,7 @@ def main() -> int:
                 args.concurrency,
                 args.max_retries,
                 args.retry_delay,
+                args.limit,
             )
         )
         return 0
