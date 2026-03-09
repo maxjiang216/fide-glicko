@@ -101,8 +101,10 @@ Alternatively, use `--input` with a tournament codes file and `--details-path` t
 
 | Argument | Short | Default | Description |
 |----------|-------|---------|--------------|
-| `--directory` | `-d` | `data` | Directory to output results (resolves to `src/data` when `data`) |
-| `--override` | `-o` | `False` | Overwrite existing parquet/JSON even if they exist |
+| `--output-prefix` | | `None` | S3 prefix (e.g. data). When set, writes to S3 instead of local. |
+| `--bucket` | | `fide-glicko` | S3 bucket (only with --output-prefix) |
+| `--directory` | `-d` | `data` | Directory for local output (ignored if --output-prefix set) |
+| `--override` | `-o` | `False` | Overwrite existing files |
 | `--quiet` | `-q` | `False` | Reduce output |
 | `--federations` | `-f` | `data/federations.csv` | Path to federations CSV for non-standard fed check |
 | `--report` | `-r` | `players_list_report.json` | Path for report JSON (in output dir) |
@@ -112,8 +114,11 @@ Alternatively, use `--input` with a tournament codes file and `--details-path` t
 **Examples:**
 
 ```bash
-# Download and save (skips if files exist)
+# Download and save locally (skips if files exist)
 python src/scraper/get_player_list.py
+
+# Write to S3 (for Lambda or remote storage)
+python src/scraper/get_player_list.py --output-prefix data
 
 # Force re-download and overwrite
 python src/scraper/get_player_list.py --override

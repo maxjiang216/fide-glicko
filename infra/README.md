@@ -79,6 +79,29 @@ aws lambda invoke --function-name fide-glicko-federations \
 
 ---
 
+## Player List Lambda
+
+Same OIDC/secrets as federations. Deploy:
+
+```bash
+./infra/deploy_player_list_lambda.sh
+```
+
+Invoke (writes to data/, uses federations.csv for report if present):
+
+```bash
+aws lambda invoke --function-name fide-glicko-player-list \
+  --payload '{"bucket":"fide-glicko","output_prefix":"data"}' \
+  out.json && cat out.json
+```
+
+- **Timeout:** 5 min (downloads ~45MB from FIDE)
+- **Memory:** 1024 MB
+- **Outputs:** players_list.parquet, players_list_sample.json, players_list.xml, players_list_report.json
+- **Deploy note:** Package (~70MB) exceeds Lambda's 50MB direct upload limit; deploy script uploads to S3 first (`s3://fide-glicko/lambda-packages/`).
+
+---
+
 ## S3 Bucket Structure
 
 The `fide-glicko` bucket stores scraped data and run artifacts.

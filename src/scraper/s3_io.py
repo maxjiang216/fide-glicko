@@ -82,3 +82,20 @@ def build_s3_uri(bucket: str, prefix: str, filename: str) -> str:
     prefix = prefix.rstrip("/")
     key = f"{prefix}/{filename}" if prefix else filename
     return f"{S3_PREFIX}{bucket}/{key}"
+
+
+def download_to_file(s3_uri: str, local_path: str | Path) -> Path:
+    """
+    Download S3 object to a local file.
+
+    Returns:
+        Path to the local file.
+    """
+    import boto3
+
+    bucket, key = parse_s3_uri(s3_uri)
+    s3 = boto3.client("s3")
+    path = Path(local_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    s3.download_file(bucket, key, str(path))
+    return path
