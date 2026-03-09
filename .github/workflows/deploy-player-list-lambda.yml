@@ -58,7 +58,7 @@ jobs:
           LAMBDA_ROLE_ARN: ${{ secrets.LAMBDA_ROLE_ARN }}
         run: |
           if [[ "${{ github.event_name }}" == "push" || "${{ github.event.inputs.deploy }}" == "true" ]]; then
-            ./infra/deploy_player_list_lambda.sh
+            bash infra/deploy_player_list_lambda.sh
           else
-            ./infra/deploy_player_list_lambda.sh --zip-only
+            bash infra/deploy_player_list_lambda.sh --zip-only
           fi
