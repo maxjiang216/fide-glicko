@@ -22,6 +22,14 @@ on:
       - "handlers/federations.py"
       - "infra/deploy_federations_lambda.sh"
       - "pyproject.toml"
+  pull_request:
+    paths:
+      - "src/scraper/get_federations.py"
+      - "src/scraper/s3_io.py"
+      - "handlers/federations.py"
+      - "infra/deploy_federations_lambda.sh"
+      - ".github/workflows/deploy-federations-lambda.yml"
+      - "pyproject.toml"
   workflow_dispatch:
     inputs:
       deploy:
