@@ -52,45 +52,65 @@ DEPLOY_BUCKET="${LAMBDA_DEPLOY_BUCKET:-fide-glicko}"
 DEPLOY_KEY="lambda-packages/player_list_$(date +%Y%m%d%H%M%S).zip"
 ZIP_SIZE_BYTES=$(stat -c%s "$ZIP_PATH")
 
-update_code() {
-  if [[ "$ZIP_SIZE_BYTES" -gt 52428800 ]]; then
-    echo "Zip exceeds 50MB, uploading to s3://$DEPLOY_BUCKET/$DEPLOY_KEY"
-    aws s3 cp "$ZIP_PATH" "s3://$DEPLOY_BUCKET/$DEPLOY_KEY"
-    aws lambda update-function-code --function-name "$1" --s3-bucket "$DEPLOY_BUCKET" --s3-key "$DEPLOY_KEY"
-  else
-    aws lambda update-function-code --function-name "$1" --zip-file "fileb://$ZIP_PATH"
-  fi
+# Deploy from S3 (zip > 50MB) or direct upload
+deploy_from_s3() {
+  aws lambda update-function-code \
+    --function-name "$FUNCTION_NAME" \
+    --s3-bucket "$DEPLOY_BUCKET" \
+    --s3-key "$DEPLOY_KEY"
 }
 
-create_func() {
-  if [[ "$ZIP_SIZE_BYTES" -gt 52428800 ]]; then
-    echo "Zip exceeds 50MB, uploading to s3://$DEPLOY_BUCKET/$DEPLOY_KEY"
-    aws s3 cp "$ZIP_PATH" "s3://$DEPLOY_BUCKET/$DEPLOY_KEY"
-    aws lambda create-function \
-      --function-name "$FUNCTION_NAME" \
-      --runtime "$RUNTIME" --handler "$HANDLER" --role "$LAMBDA_ROLE_ARN" \
-      --timeout "$TIMEOUT" --memory-size "$MEMORY" \
-      --s3-bucket "$DEPLOY_BUCKET" --s3-key "$DEPLOY_KEY"
-  else
-    aws lambda create-function \
-      --function-name "$FUNCTION_NAME" \
-      --runtime "$RUNTIME" --handler "$HANDLER" --role "$LAMBDA_ROLE_ARN" \
-      --timeout "$TIMEOUT" --memory-size "$MEMORY" \
-      --zip-file "fileb://$ZIP_PATH"
-  fi
+deploy_from_zip() {
+  aws lambda update-function-code \
+    --function-name "$FUNCTION_NAME" \
+    --zip-file "fileb://$ZIP_PATH"
+}
+
+create_from_s3() {
+  aws lambda create-function \
+    --function-name "$FUNCTION_NAME" \
+    --runtime "$RUNTIME" \
+    --handler "$HANDLER" \
+    --role "$LAMBDA_ROLE_ARN" \
+    --timeout "$TIMEOUT" \
+    --memory-size "$MEMORY" \
+    --code "S3Bucket=$DEPLOY_BUCKET,S3Key=$DEPLOY_KEY"
+}
+
+create_from_zip() {
+  aws lambda create-function \
+    --function-name "$FUNCTION_NAME" \
+    --runtime "$RUNTIME" \
+    --handler "$HANDLER" \
+    --role "$LAMBDA_ROLE_ARN" \
+    --timeout "$TIMEOUT" \
+    --memory-size "$MEMORY" \
+    --zip-file "fileb://$ZIP_PATH"
 }
 
 # Create or update Lambda
 if aws lambda get-function --function-name "$FUNCTION_NAME" 2>/dev/null; then
   echo "Updating existing Lambda $FUNCTION_NAME..."
-  update_code "$FUNCTION_NAME"
+  if [[ "$ZIP_SIZE_BYTES" -gt 52428800 ]]; then
+    echo "Zip exceeds 50MB, uploading to s3://$DEPLOY_BUCKET/$DEPLOY_KEY"
+    aws s3 cp "$ZIP_PATH" "s3://$DEPLOY_BUCKET/$DEPLOY_KEY"
+    deploy_from_s3
+  else
+    deploy_from_zip
+  fi
 else
   echo "Creating Lambda $FUNCTION_NAME..."
   if [[ -z "${LAMBDA_ROLE_ARN:-}" ]]; then
     echo "Error: Set LAMBDA_ROLE_ARN (execution role with S3 + CloudWatch permissions)."
     exit 1
   fi
-  create_func
+  if [[ "$ZIP_SIZE_BYTES" -gt 52428800 ]]; then
+    echo "Zip exceeds 50MB, uploading to s3://$DEPLOY_BUCKET/$DEPLOY_KEY"
+    aws s3 cp "$ZIP_PATH" "s3://$DEPLOY_BUCKET/$DEPLOY_KEY"
+    create_from_s3
+  else
+    create_from_zip
+  fi
 fi
 
 echo "Done. Invoke with:"

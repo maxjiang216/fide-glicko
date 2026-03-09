@@ -14,6 +14,12 @@ on:
       - "infra/deploy_player_list_lambda.sh"
       - "pyproject.toml"
   workflow_dispatch:
+    inputs:
+      deploy:
+        description: "Deploy to AWS (false = build only, no AWS needed)"
+        required: false
+        default: false
+        type: boolean
 
 jobs:
   deploy:
@@ -24,7 +30,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Install AWS CLI v2
+        if: github.event_name == 'push' || github.event.inputs.deploy == 'true'
+        run: |
+          curl -s "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o /tmp/awscliv2.zip
+          unzip -q /tmp/awscliv2.zip -d /tmp
+          sudo /tmp/aws/install --update
+          aws --version
+
       - name: Configure AWS credentials
+        if: github.event_name == 'push' || github.event.inputs.deploy == 'true'
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
@@ -33,4 +48,9 @@ jobs:
       - name: Build and deploy Lambda
         env:
           LAMBDA_ROLE_ARN: ${{ secrets.LAMBDA_ROLE_ARN }}
-        run: ./infra/deploy_player_list_lambda.sh
+        run: |
+          if [[ "${{ github.event_name }}" == "push" || "${{ github.event.inputs.deploy }}" == "true" ]]; then
+            ./infra/deploy_player_list_lambda.sh
+          else
+            ./infra/deploy_player_list_lambda.sh --zip-only
+          fi

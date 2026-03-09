@@ -22,7 +22,13 @@ on:
       - "handlers/federations.py"
       - "infra/deploy_federations_lambda.sh"
       - "pyproject.toml"
-  workflow_dispatch:  # Allow manual trigger
+  workflow_dispatch:
+    inputs:
+      deploy:
+        description: "Deploy to AWS (false = build only, no AWS needed)"
+        required: false
+        default: false
+        type: boolean
 
 jobs:
   deploy:
@@ -34,14 +40,18 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Configure AWS credentials
+        if: github.event_name == 'push' || github.event.inputs.deploy == 'true'
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          # OIDC: set AWS_ROLE_ARN secret (IAM role for GitHub to assume)
-          # Access keys: set AWS_ACCESS_KEY_ID + AWS_SECRET_ACCESS_KEY, use role-to-assume: ""
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
           aws-region: ${{ vars.AWS_REGION || 'us-east-1' }}
 
       - name: Build and deploy Lambda
         env:
           LAMBDA_ROLE_ARN: ${{ secrets.LAMBDA_ROLE_ARN }}
-        run: ./infra/deploy_federations_lambda.sh
+        run: |
+          if [[ "${{ github.event_name }}" == "push" || "${{ github.event.inputs.deploy }}" == "true" ]]; then
+            ./infra/deploy_federations_lambda.sh
+          else
+            ./infra/deploy_federations_lambda.sh --zip-only
+          fi
