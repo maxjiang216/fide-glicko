@@ -91,6 +91,12 @@ def _sanitize_byear(value: int | None) -> int | None:
     return None
 
 
+def _local_tag(elem: ET.Element) -> str:
+    """Return local tag name, stripping XML namespace if present."""
+    tag = elem.tag
+    return tag.split("}")[-1] if "}" in tag else tag
+
+
 def parse_xml_content(xml_bytes: bytes) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     """
     Parse XML into list of player dicts: byear, id, fed, name, sex, title, w_title.
@@ -103,8 +109,9 @@ def parse_xml_content(xml_bytes: bytes) -> tuple[list[dict[str, Any]], dict[str,
         - xml_fields_found: sorted list of all element names found in player elements
         - skipped_no_id: count of players skipped for missing/invalid fideid
         - byear_out_of_range: count of players with byear outside 1900..current_year
+
+    Uses iterparse (streaming) to avoid loading the full DOM into memory.
     """
-    root = ET.fromstring(xml_bytes)
     current_year = datetime.datetime.now().year
     rows: list[dict[str, Any]] = []
     xml_fields: set[str] = set()
@@ -117,33 +124,41 @@ def parse_xml_content(xml_bytes: bytes) -> tuple[list[dict[str, Any]], dict[str,
     title_w_title_pair_counter: Counter[tuple[str, str]] = Counter()
     title_w_title_to_ids: dict[tuple[str, str], list[int]] = {}
     players_with_multiple_titles = 0
+    BYEAR_OUT_OF_RANGE_CAP = 100
 
-    for player in root.findall("player"):
-        for child in player:
-            xml_fields.add(child.tag)
-
-        fideid = _safe_int(_elem_text(player.find("fideid")))
-        if fideid is None:
-            skipped_no_id += 1
+    context = ET.iterparse(BytesIO(xml_bytes), events=("end",))
+    for _event, elem in context:
+        if _local_tag(elem) != "player":
             continue
 
-        byear_raw = _safe_int(_elem_text(player.find("birthday")), allow_zero=False)
+        children = {_local_tag(c): c for c in elem}
+        for tag in children:
+            xml_fields.add(tag)
+
+        fideid = _safe_int(_elem_text(children.get("fideid")))
+        if fideid is None:
+            skipped_no_id += 1
+            elem.clear()
+            continue
+
+        byear_raw = _safe_int(_elem_text(children.get("birthday")), allow_zero=False)
         byear = _sanitize_byear(byear_raw)
         if byear_raw is not None and byear is None:
             byear_out_of_range += 1
-            byear_out_of_range_data.append((fideid, byear_raw))
+            if len(byear_out_of_range_data) < BYEAR_OUT_OF_RANGE_CAP:
+                byear_out_of_range_data.append((fideid, byear_raw))
 
-        title_raw = _elem_text(player.find("title"))
+        title_raw = _elem_text(children.get("title"))
         title_normalized = ""
         if title_raw:
             tit_lo = title_raw.lower()
             title_normalized = TITLE_MAP.get(tit_lo, title_raw)
-        w_title_raw = _elem_text(player.find("w_title"))
+        w_title_raw = _elem_text(children.get("w_title"))
         w_title_normalized = ""
         if w_title_raw:
             wt_lo = w_title_raw.lower()
             w_title_normalized = TITLE_MAP.get(wt_lo, w_title_raw)
-        o_title_raw = _elem_text(player.find("o_title"))
+        o_title_raw = _elem_text(children.get("o_title"))
 
         if title_normalized:
             title_counter[title_normalized] += 1
@@ -153,24 +168,23 @@ def parse_xml_content(xml_bytes: bytes) -> tuple[list[dict[str, Any]], dict[str,
             o_title_counter[o_title_raw] += 1
         pair = (title_normalized or "", w_title_raw or "")
         title_w_title_pair_counter[pair] += 1
-        title_w_title_to_ids.setdefault(pair, []).append(fideid)
+        if pair not in title_w_title_to_ids:
+            title_w_title_to_ids[pair] = [fideid]
+
         non_empty_count = sum(
             1 for v in (title_normalized, w_title_raw, o_title_raw) if v
         )
         if non_empty_count >= 2:
             players_with_multiple_titles += 1
 
-        # Output: title = open titles only (GM, IM, FM, CM); w_title = women's titles
-        # If XML has women's title in "title" field, keep title blank (use w_title)
         output_title = title_normalized if title_normalized in OPEN_TITLES else None
         output_w_title = None
         if w_title_normalized in WOMEN_TITLES:
             output_w_title = w_title_normalized
         elif title_normalized in WOMEN_TITLES:
-            # Women's title in "title" when w_title empty - put in w_title
             output_w_title = title_normalized
 
-        fed = _elem_text(player.find("country"))
+        fed = _elem_text(children.get("country"))
         if fed:
             fed = fed.upper()
 
@@ -179,12 +193,14 @@ def parse_xml_content(xml_bytes: bytes) -> tuple[list[dict[str, Any]], dict[str,
                 "byear": byear,
                 "id": fideid,
                 "fed": fed,
-                "name": _elem_text(player.find("name")) or None,
-                "sex": _elem_text(player.find("sex")) or None,
+                "name": _elem_text(children.get("name")) or None,
+                "sex": _elem_text(children.get("sex")) or None,
                 "title": output_title,
                 "w_title": output_w_title,
             }
         )
+
+        elem.clear()
 
     parse_stats: dict[str, Any] = {
         "xml_fields_found": sorted(xml_fields),
@@ -214,7 +230,7 @@ def parse_xml_content(xml_bytes: bytes) -> tuple[list[dict[str, Any]], dict[str,
                 "w_title": w,
                 "count": c,
                 "sample_fide_id": (
-                    random.choice(title_w_title_to_ids[(t, w)])
+                    title_w_title_to_ids[(t, w)][0]
                     if title_w_title_to_ids.get((t, w))
                     else None
                 ),
