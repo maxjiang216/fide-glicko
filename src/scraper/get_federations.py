@@ -1,19 +1,25 @@
 #!/usr/bin/env python3
 """
 Scrape FIDE website to get the list of federations.
+
+Supports flexible output: local path (default) or S3 URI (s3://bucket/key).
+Use --output s3://bucket/key for Lambda or remote storage.
 """
 
 import argparse
 import csv
+import io
 import logging
 import signal
 import sys
 import time
 from pathlib import Path
-from typing import List, Dict
+from typing import List, Dict, Optional
 
 import requests
 from bs4 import BeautifulSoup
+
+from s3_io import is_s3_path, output_exists, write_output
 
 URL = "https://ratings.fide.com/rated_tournaments.phtml"
 
@@ -25,7 +31,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # State for graceful shutdown
-_shutdown_state = {"federations": [], "output_file": None, "completed": False}
+_shutdown_state = {"federations": [], "output_path": None, "completed": False}
 
 
 def is_valid_federation_code(code: str) -> bool:
@@ -96,29 +102,96 @@ def get_federations_with_retries(
                 raise
 
 
+def _federations_to_csv(federations: List[Dict[str, str]]) -> str:
+    """Convert federations list to CSV string."""
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow(["code", "name"])
+    for fed in federations:
+        writer.writerow([fed["code"], fed["name"]])
+    return buf.getvalue()
+
+
 def _graceful_shutdown(signum: int, frame) -> None:
     """Save partial results on SIGINT/SIGTERM."""
     global _shutdown_state
     logger.warning("\nReceived interrupt, attempting graceful shutdown...")
     federations = _shutdown_state.get("federations", [])
-    output_file = _shutdown_state.get("output_file")
-    if federations and output_file:
+    output_path = _shutdown_state.get("output_path")
+    if federations and output_path:
         try:
-            output_file.parent.mkdir(parents=True, exist_ok=True)
-            with open(output_file, "w", newline="", encoding="utf-8") as f:
-                writer = csv.writer(f)
-                writer.writerow(["code", "name"])
-                for fed in federations:
-                    writer.writerow([fed["code"], fed["name"]])
-            logger.info(f"Saved {len(federations)} federations to {output_file}")
+            content = _federations_to_csv(federations)
+            write_output(content, output_path)
+            logger.info("Saved %d federations to %s", len(federations), output_path)
         except Exception as e:
-            logger.error(f"Error saving partial results: {e}")
+            logger.error("Error saving partial results: %s", e)
     else:
         logger.info("No partial results to save")
     sys.exit(130 if signum == 2 else 0)  # 130 = SIGINT
 
 
-def main():
+def run(
+    output_path: str,
+    override: bool = False,
+    quiet: bool = False,
+) -> int:
+    """
+    Scrape federations and write to output_path.
+
+    Args:
+        output_path: Local path or S3 URI (s3://bucket/key).
+        override: If True, overwrite existing file. If False, skip when exists.
+        quiet: If True, reduce log output to WARNING only.
+
+    Returns:
+        0 on success, 1 on failure.
+    """
+    global _shutdown_state
+
+    if quiet:
+        logging.getLogger().setLevel(logging.WARNING)
+    else:
+        logging.getLogger().setLevel(logging.INFO)
+
+    if output_exists(output_path) and not override:
+        logger.info(
+            "Output %s already exists. Use override=True to scrape and replace.",
+            output_path,
+        )
+        return 0
+
+    start_time = time.time()
+    logger.info("Fetching federations list from %s...", URL)
+
+    try:
+        federations = get_federations_with_retries()
+    except Exception as e:
+        logger.error("Error fetching federations: %s", e)
+        return 1
+
+    if not federations:
+        logger.error("No federations retrieved")
+        return 1
+
+    _shutdown_state["federations"] = federations
+    _shutdown_state["output_path"] = output_path
+
+    elapsed_time = time.time() - start_time
+    content = _federations_to_csv(federations)
+    write_output(content, output_path)
+
+    if not quiet:
+        for fed in federations:
+            logger.info("%s: %s", fed["code"], fed["name"])
+        logger.info("Found %d federations", len(federations))
+        logger.info("Time taken: %.2f seconds", elapsed_time)
+
+    logger.info("Saved %d federations to %s", len(federations), output_path)
+    _shutdown_state["completed"] = True
+    return 0
+
+
+def main() -> int:
     signal.signal(signal.SIGINT, _graceful_shutdown)
     signal.signal(signal.SIGTERM, _graceful_shutdown)
 
@@ -126,18 +199,24 @@ def main():
         description="Scrape FIDE website to get the list of federations"
     )
     parser.add_argument(
+        "--output",
+        type=str,
+        default=None,
+        help="Output path: local file or S3 URI (s3://bucket/key). Overrides -d/-f.",
+    )
+    parser.add_argument(
         "--directory",
         "-d",
         type=str,
         default="data",
-        help="Directory to output the result (default: 'data' from repo root)",
+        help="Directory to output (default: data). Ignored if --output is set.",
     )
     parser.add_argument(
         "--filename",
         "-f",
         type=str,
         default="federations.csv",
-        help="Output filename (default: federations.csv)",
+        help="Output filename (default: federations.csv). Ignored if --output is set.",
     )
     parser.add_argument(
         "--quiet",
@@ -154,62 +233,20 @@ def main():
 
     args = parser.parse_args()
 
-    # Log level: DEBUG for verbose, WARNING for quiet
-    if args.quiet:
-        logging.getLogger().setLevel(logging.WARNING)
+    if args.output is not None:
+        output_path = args.output
     else:
-        logging.getLogger().setLevel(logging.INFO)
+        repo_root = Path(__file__).parent.parent.parent
+        output_dir = repo_root / args.directory
+        output_dir.mkdir(parents=True, exist_ok=True)
+        output_path = str(output_dir / args.filename)
 
-    # Determine output path (relative to repo root)
-    repo_root = Path(__file__).parent.parent.parent
-    output_dir = repo_root / args.directory
-    output_dir.mkdir(parents=True, exist_ok=True)
-    output_file = output_dir / args.filename
-
-    # Check if file already exists
-    if output_file.exists() and not args.override:
-        logger.info(
-            "File %s already exists. Use --override to scrape and replace.",
-            output_file,
-        )
-        return 0
-
-    start_time = time.time()
-    logger.info("Fetching federations list...")
-
-    try:
-        federations = get_federations_with_retries()
-    except Exception as e:
-        logger.error("Error fetching federations: %s", e)
-        return 1
-
-    if not federations:
-        logger.error("No federations retrieved")
-        return 1
-
-    # Store for graceful shutdown
-    _shutdown_state["federations"] = federations
-    _shutdown_state["output_file"] = output_file
-
-    elapsed_time = time.time() - start_time
-
-    # Write to CSV
-    with open(output_file, "w", newline="", encoding="utf-8") as f:
-        writer = csv.writer(f)
-        writer.writerow(["code", "name"])
-        for fed in federations:
-            writer.writerow([fed["code"], fed["name"]])
-
-    if not args.quiet:
-        for fed in federations:
-            logger.info("%s: %s", fed["code"], fed["name"])
-        logger.info("Found %d federations", len(federations))
-        logger.info("Time taken: %.2f seconds", elapsed_time)
-
-    logger.info("Saved %d federations to %s", len(federations), output_file)
-    _shutdown_state["completed"] = True
-    return 0
+    return run(
+        output_path=output_path,
+        override=args.override,
+        quiet=args.quiet,
+    )
 
 
 if __name__ == "__main__":
-    exit(main())
+    sys.exit(main())

@@ -29,6 +29,7 @@ ENV/
 uv.lock
 
 # IDE
+.cursor/
 .vscode/
 .idea/
 *.swp

@@ -126,8 +126,9 @@ python src/scraper/get_player_list.py --report data/player_report.json
 
 | Argument | Short | Default | Description |
 |----------|-------|---------|-------------|
-| `--directory` | `-d` | `data` | Directory to output the result (relative to repo root) |
-| `--filename` | `-f` | `federations.csv` | Output filename |
+| `--output` | | `None` | Output path: local file or S3 URI (s3://bucket/key). Overrides -d/-f. |
+| `--directory` | `-d` | `data` | Directory to output (ignored if --output is set) |
+| `--filename` | `-f` | `federations.csv` | Output filename (ignored if --output is set) |
 | `--quiet` | `-q` | `False` | Disable verbose output |
 | `--override` | `-o` | `False` | Force re-scraping even if output file exists |
 
@@ -136,6 +137,9 @@ python src/scraper/get_player_list.py --report data/player_report.json
 ```bash
 # Custom output directory and filename
 python src/scraper/get_federations.py --directory custom_data --filename my_federations.csv
+
+# Write directly to S3 (for Lambda or remote storage)
+python src/scraper/get_federations.py --output s3://fide-glicko/data/federations.csv
 
 # Quiet mode (minimal output)
 python src/scraper/get_federations.py --quiet

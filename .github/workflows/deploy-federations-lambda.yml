@@ -1,0 +1,47 @@
+# Deploy federations Lambda to AWS when relevant files change.
+#
+# Setup (choose one):
+#
+# Option A: OIDC (recommended, no long-lived secrets)
+#   1. Create OIDC provider in IAM: https://docs.github.com/en/actions/deployment/security-hardening-your-deployments/configuring-openid-connect-in-amazon-web-services
+#   2. Create IAM role that trusts GitHub OIDC, attach lambda:UpdateFunctionCode, lambda:GetFunction, lambda:CreateFunction, iam:PassRole (for create)
+#   3. Add secret: AWS_ROLE_ARN = the role ARN
+#
+# Option B: Access keys
+#   1. Add secrets: AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY
+#   2. Optional for first-time create: LAMBDA_ROLE_ARN (execution role for the Lambda)
+#
+name: Deploy Federations Lambda
+
+on:
+  push:
+    branches: [main, master]
+    paths:
+      - "src/scraper/get_federations.py"
+      - "src/scraper/s3_io.py"
+      - "handlers/federations.py"
+      - "infra/deploy_federations_lambda.sh"
+      - "pyproject.toml"
+  workflow_dispatch:  # Allow manual trigger
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write   # Required for OIDC
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          # OIDC: set AWS_ROLE_ARN secret (IAM role for GitHub to assume)
+          # Access keys: set AWS_ACCESS_KEY_ID + AWS_SECRET_ACCESS_KEY, use role-to-assume: ""
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION || 'us-east-1' }}
+
+      - name: Build and deploy Lambda
+        env:
+          LAMBDA_ROLE_ARN: ${{ secrets.LAMBDA_ROLE_ARN }}
+        run: ./infra/deploy_federations_lambda.sh
