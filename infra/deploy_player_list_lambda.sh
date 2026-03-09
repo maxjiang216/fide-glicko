@@ -18,7 +18,7 @@ FUNCTION_NAME="${FUNCTION_NAME:-fide-glicko-player-list}"
 RUNTIME="python3.12"
 HANDLER="handlers.player_list.lambda_handler"
 TIMEOUT=300
-MEMORY=1024
+MEMORY=6144
 
 mkdir -p "$BUILD_DIR"
 rm -rf "$BUILD_DIR"/*
@@ -98,6 +98,12 @@ if aws lambda get-function --function-name "$FUNCTION_NAME" 2>/dev/null; then
   else
     deploy_from_zip
   fi
+  echo "Waiting for code update to complete..."
+  aws lambda wait function-updated --function-name "$FUNCTION_NAME"
+  aws lambda update-function-configuration \
+    --function-name "$FUNCTION_NAME" \
+    --timeout "$TIMEOUT" \
+    --memory-size "$MEMORY"
 else
   echo "Creating Lambda $FUNCTION_NAME..."
   if [[ -z "${LAMBDA_ROLE_ARN:-}" ]]; then
