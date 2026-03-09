@@ -1,25 +1,25 @@
-# Deploy player list Lambda to AWS when relevant files change.
+# Deploy tournaments Lambda to AWS when relevant files change.
 #
 # Same OIDC/secret setup as deploy-federations-lambda.
 #
-name: Deploy Player List Lambda
+name: Deploy Tournaments Lambda
 
 on:
   push:
     branches: [main, master]
     paths:
-      - "src/scraper/get_player_list.py"
+      - "src/scraper/get_tournaments.py"
       - "src/scraper/s3_io.py"
-      - "handlers/player_list.py"
-      - "infra/deploy_player_list_lambda.sh"
+      - "handlers/tournaments.py"
+      - "infra/deploy_tournaments_lambda.sh"
       - "pyproject.toml"
   pull_request:
     paths:
-      - "src/scraper/get_player_list.py"
+      - "src/scraper/get_tournaments.py"
       - "src/scraper/s3_io.py"
-      - "handlers/player_list.py"
-      - "infra/deploy_player_list_lambda.sh"
-      - ".github/workflows/deploy-player-list-lambda.yml"
+      - "handlers/tournaments.py"
+      - "infra/deploy_tournaments_lambda.sh"
+      - ".github/workflows/deploy-tournaments-lambda.yml"
       - "pyproject.toml"
   workflow_dispatch:
     inputs:
@@ -38,14 +38,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install AWS CLI v2
-        if: github.event_name == 'push' || github.event.inputs.deploy == 'true'
-        run: |
-          curl -s "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o /tmp/awscliv2.zip
-          unzip -q /tmp/awscliv2.zip -d /tmp
-          sudo /tmp/aws/install --update
-          aws --version
-
       - name: Configure AWS credentials
         if: github.event_name == 'push' || github.event.inputs.deploy == 'true'
         uses: aws-actions/configure-aws-credentials@v4
@@ -58,7 +50,7 @@ jobs:
           LAMBDA_ROLE_ARN: ${{ secrets.LAMBDA_ROLE_ARN }}
         run: |
           if [[ "${{ github.event_name }}" == "push" || "${{ github.event.inputs.deploy }}" == "true" ]]; then
-            bash infra/deploy_player_list_lambda.sh
+            bash infra/deploy_tournaments_lambda.sh
           else
-            bash infra/deploy_player_list_lambda.sh --zip-only
+            bash infra/deploy_tournaments_lambda.sh --zip-only
           fi

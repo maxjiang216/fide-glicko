@@ -14,12 +14,21 @@ import logging
 import re
 import signal
 import sys
+import tempfile
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import List, Optional, Tuple, Union
 
 import aiohttp
+
+from s3_io import (
+    build_s3_uri,
+    download_to_file,
+    is_s3_path,
+    output_exists,
+    write_output,
+)
 
 # Base URLs for FIDE tournament endpoints
 TOURNAMENTS_URL = "https://ratings.fide.com/a_tournaments.php"
@@ -351,10 +360,9 @@ def graceful_shutdown(signum: int, frame) -> None:
     # Sort by ID as string (IDs are kept as strings; numeric IDs sort correctly)
     unique_tournaments.sort(key=lambda t: t.tournament_id)
 
-    # Save partial results (both formats)
-    if output_path and unique_tournaments:
+    # Save partial results (local only; S3/Lambda = all-or-nothing, no partial writes)
+    if output_path and unique_tournaments and not is_s3_path(str(output_path)):
         try:
-            # Prepare JSON data
             output_data = [
                 {
                     "tournament_id": t.tournament_id,
@@ -367,23 +375,17 @@ def graceful_shutdown(signum: int, frame) -> None:
                 }
                 for t in unique_tournaments
             ]
+            ids_content = "\n".join(t.tournament_id for t in unique_tournaments) + "\n"
+            json_content = json.dumps(output_data, indent=2, ensure_ascii=False)
 
-            # Save IDs file
-            ids_path = output_path
+            ids_path = Path(output_path)
             ids_path.parent.mkdir(parents=True, exist_ok=True)
-            with open(ids_path, "w", encoding="utf-8") as f:
-                for t in unique_tournaments:
-                    f.write(f"{t.tournament_id}\n")
-
-            # Save JSON file
-            json_path = (
-                output_path.parent.parent / "tournament_ids_json" / output_path.name
-            )
+            ids_path.write_text(ids_content, encoding="utf-8")
+            json_path = ids_path.parent.parent / "tournament_ids_json" / ids_path.name
             if json_path.suffix != ".json":
                 json_path = json_path.with_suffix(".json")
             json_path.parent.mkdir(parents=True, exist_ok=True)
-            with open(json_path, "w", encoding="utf-8") as f:
-                json.dump(output_data, f, indent=2, ensure_ascii=False)
+            json_path.write_text(json_content, encoding="utf-8")
 
             logger.info(
                 f"Saved {len(unique_tournaments)} unique tournament IDs to {ids_path} and {json_path}"
@@ -411,12 +413,17 @@ def graceful_shutdown(signum: int, frame) -> None:
     print(f"  Unique tournament IDs: {len(unique_tournaments)}")
     print(f"  Time elapsed: {format_time(elapsed_time)}")
     if output_path:
-        ids_path = output_path
-        json_path = output_path.parent.parent / "tournament_ids_json" / output_path.name
-        if json_path.suffix != ".json":
-            json_path = json_path.with_suffix(".json")
-        print(f"  IDs file: {ids_path}")
-        print(f"  JSON file: {json_path}")
+        if is_s3_path(str(output_path)):
+            json_uri = _json_uri_from_ids_uri(str(output_path))
+            print(f"  IDs file: {output_path}")
+            print(f"  JSON file: {json_uri}")
+        else:
+            ids_path = Path(output_path)
+            json_path = ids_path.parent.parent / "tournament_ids_json" / ids_path.name
+            if json_path.suffix != ".json":
+                json_path = json_path.with_suffix(".json")
+            print(f"  IDs file: {ids_path}")
+            print(f"  JSON file: {json_path}")
     if log_entries and log_path:
         print(f"  Log saved to: {log_path}")
     print("=" * 80)
@@ -424,11 +431,21 @@ def graceful_shutdown(signum: int, frame) -> None:
     sys.exit(0)
 
 
+def _json_uri_from_ids_uri(ids_uri: str) -> str:
+    """Derive JSON output URI from IDs URI: .../tournament_ids/2025_03 -> .../tournament_ids_json/2025_03.json"""
+    if not ids_uri.endswith(".json"):
+        json_uri = ids_uri.replace("/tournament_ids/", "/tournament_ids_json/")
+        if not json_uri.endswith(".json"):
+            json_uri = json_uri + ".json"
+        return json_uri
+    return ids_uri
+
+
 async def scrape_month(
     year: int,
     month: int,
     federations_path: Path,
-    output_path: Path,
+    output_path: Union[Path, str],
     output_format: str = "ids",
     max_concurrency: int = 20,
     max_retries: int = 3,
@@ -569,21 +586,26 @@ async def scrape_month(
         for t in unique_tournaments
     ]
 
-    # Write both formats to separate subfolders
-    # IDs file
-    ids_path = output_path
-    ids_path.parent.mkdir(parents=True, exist_ok=True)
-    with open(ids_path, "w", encoding="utf-8") as f:
-        for t in unique_tournaments:
-            f.write(f"{t.tournament_id}\n")
+    # Write both formats to separate subfolders (local or S3)
+    ids_content = "\n".join(t.tournament_id for t in unique_tournaments) + "\n"
+    json_content = json.dumps(output_data, indent=2, ensure_ascii=False)
 
-    # JSON file (always saved, prettified)
-    json_path = output_path.parent.parent / "tournament_ids_json" / output_path.name
-    if json_path.suffix != ".json":
-        json_path = json_path.with_suffix(".json")
-    json_path.parent.mkdir(parents=True, exist_ok=True)
-    with open(json_path, "w", encoding="utf-8") as f:
-        json.dump(output_data, f, indent=2, ensure_ascii=False)
+    if is_s3_path(str(output_path)):
+        ids_uri = str(output_path)
+        json_uri = _json_uri_from_ids_uri(ids_uri)
+        write_output(ids_content, ids_uri)
+        write_output(json_content, json_uri)
+        ids_path = ids_uri
+        json_path = json_uri
+    else:
+        ids_path = Path(output_path)
+        ids_path.parent.mkdir(parents=True, exist_ok=True)
+        ids_path.write_text(ids_content, encoding="utf-8")
+        json_path = ids_path.parent.parent / "tournament_ids_json" / ids_path.name
+        if json_path.suffix != ".json":
+            json_path = json_path.with_suffix(".json")
+        json_path.parent.mkdir(parents=True, exist_ok=True)
+        json_path.write_text(json_content, encoding="utf-8")
 
     elapsed = time.time() - start_time
 
@@ -609,6 +631,74 @@ async def scrape_month(
     print("=" * 80)
 
     return unique_tournaments
+
+
+def run(
+    year: int,
+    month: int,
+    bucket: str = "fide-glicko",
+    output_prefix: str = "data",
+    federations_s3_uri: Optional[str] = None,
+    override: bool = False,
+    quiet: bool = False,
+    max_concurrency: int = 20,
+) -> int:
+    """
+    Scrape tournament IDs for a month and write to S3.
+
+    Args:
+        year: Year to scrape.
+        month: Month to scrape (1-12).
+        bucket: S3 bucket name.
+        output_prefix: S3 prefix (e.g. "data" or "runs/dev-123").
+        federations_s3_uri: S3 URI for federations.csv.
+        override: If True, overwrite existing output.
+        quiet: If True, reduce log output.
+        max_concurrency: Max concurrent requests.
+
+    Returns:
+        0 on success, 1 on failure.
+    """
+    if month < 1 or month > 12:
+        logger.error("Month must be between 1 and 12")
+        return 1
+
+    if quiet:
+        logging.getLogger().setLevel(logging.WARNING)
+
+    ids_uri = build_s3_uri(
+        bucket, f"{output_prefix}/tournament_ids", f"{year}_{month:02d}"
+    )
+    if output_exists(ids_uri) and not override:
+        logger.info("Output %s already exists. Use override=True to replace.", ids_uri)
+        return 0
+
+    if federations_s3_uri is None:
+        federations_s3_uri = build_s3_uri(bucket, "data", "federations.csv")
+
+    federations_path = Path(tempfile.gettempdir()) / "federations.csv"
+    try:
+        download_to_file(federations_s3_uri, federations_path)
+        logger.info("Loaded federations from %s", federations_s3_uri)
+    except Exception as e:
+        logger.error("Failed to load federations from S3: %s", e)
+        return 1
+
+    try:
+        asyncio.run(
+            scrape_month(
+                year,
+                month,
+                federations_path,
+                ids_uri,
+                output_format="ids",
+                max_concurrency=max_concurrency,
+            )
+        )
+        return 0
+    except Exception as e:
+        logger.error("Fatal error: %s", e)
+        return 1
 
 
 def main() -> int:
