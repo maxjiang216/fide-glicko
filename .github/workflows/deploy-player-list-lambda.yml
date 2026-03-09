@@ -13,6 +13,14 @@ on:
       - "handlers/player_list.py"
       - "infra/deploy_player_list_lambda.sh"
       - "pyproject.toml"
+  pull_request:
+    paths:
+      - "src/scraper/get_player_list.py"
+      - "src/scraper/s3_io.py"
+      - "handlers/player_list.py"
+      - "infra/deploy_player_list_lambda.sh"
+      - ".github/workflows/deploy-player-list-lambda.yml"
+      - "pyproject.toml"
   workflow_dispatch:
     inputs:
       deploy:
