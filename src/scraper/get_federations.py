@@ -56,7 +56,7 @@ def get_federations_with_retries(
     """
     for attempt in range(max_retries):
         try:
-            response = requests.get(URL, timeout=30)
+            response = requests.get(URL, timeout=55)
             response.raise_for_status()
 
             soup = BeautifulSoup(response.text, "html.parser")

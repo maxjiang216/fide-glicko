@@ -16,7 +16,7 @@ ZIP_PATH="$REPO_ROOT/build/federations_lambda.zip"
 FUNCTION_NAME="${FUNCTION_NAME:-fide-glicko-federations}"
 RUNTIME="python3.12"
 HANDLER="handlers.federations.lambda_handler"
-TIMEOUT=30
+TIMEOUT=60
 MEMORY=256
 
 mkdir -p "$BUILD_DIR"
@@ -52,6 +52,10 @@ if aws lambda get-function --function-name "$FUNCTION_NAME" 2>/dev/null; then
   aws lambda update-function-code \
     --function-name "$FUNCTION_NAME" \
     --zip-file "fileb://$ZIP_PATH"
+  aws lambda update-function-configuration \
+    --function-name "$FUNCTION_NAME" \
+    --timeout "$TIMEOUT" \
+    --memory-size "$MEMORY"
 else
   echo "Creating Lambda $FUNCTION_NAME..."
   # Create execution role if needed (or use existing)
