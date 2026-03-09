@@ -12,6 +12,7 @@ import csv
 import logging
 import signal
 import sys
+import tempfile
 from collections import Counter
 import datetime
 import json
@@ -25,6 +26,14 @@ from typing import Any
 
 import pandas as pd
 import requests
+
+from s3_io import (
+    build_s3_uri,
+    download_to_file,
+    is_s3_path,
+    output_exists,
+    write_output,
+)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -522,16 +531,155 @@ def build_report(
     return report
 
 
+def _save_results(
+    players: list[dict[str, Any]],
+    parse_stats: dict[str, Any],
+    xml_content: bytes,
+    parquet_path: str | Path,
+    json_sample_path: str | Path,
+    xml_path: str | Path,
+    report_path: str | Path,
+    federations_path: Path | None,
+) -> None:
+    """Write all output files (local or S3)."""
+    df = pd.DataFrame(players)
+    if df.empty:
+        logger.warning("No players to save")
+        return
+    df = df[["byear", "id", "fed", "name", "sex", "title", "w_title"]]
+    buf = BytesIO()
+    df.to_parquet(buf, index=False)
+    write_output(buf.getvalue(), str(parquet_path))
+    write_output(xml_content, str(xml_path))
+    sample = players[:100]
+    write_output(json.dumps(sample, indent=2, default=str), str(json_sample_path))
+    report = build_report(players, parse_stats, federations_path)
+    write_output(json.dumps(report, indent=2, default=str), str(report_path))
+    logger.info("Saved parquet: %s", parquet_path)
+    logger.info("Saved XML: %s", xml_path)
+    logger.info("Saved JSON sample: %s", json_sample_path)
+    logger.info("Saved report: %s", report_path)
+
+
+def run(
+    output_prefix: str,
+    bucket: str = "fide-glicko",
+    override: bool = False,
+    quiet: bool = False,
+    federations_s3_uri: str | None = None,
+) -> int:
+    """
+    Download FIDE player list and write to S3.
+
+    Args:
+        output_prefix: S3 prefix under bucket (e.g. "data" or "runs/dev-123").
+        bucket: S3 bucket name.
+        override: If True, overwrite existing files.
+        quiet: If True, reduce log output.
+        federations_s3_uri: Optional S3 URI for federations.csv (for report's fed check).
+
+    Returns:
+        0 on success, 1 on failure.
+    """
+    global _shutdown_state
+
+    if quiet:
+        logging.getLogger().setLevel(logging.WARNING)
+    else:
+        logging.getLogger().setLevel(logging.INFO)
+
+    parquet_uri = build_s3_uri(bucket, output_prefix, "players_list.parquet")
+    if output_exists(parquet_uri) and not override:
+        logger.info(
+            "Output %s already exists. Use override=True to replace.", parquet_uri
+        )
+        return 0
+
+    federations_path: Path | None = None
+    if federations_s3_uri:
+        try:
+            federations_path = download_to_file(
+                federations_s3_uri, Path(tempfile.gettempdir()) / "federations.csv"
+            )
+            logger.info("Loaded federations from %s", federations_s3_uri)
+        except Exception as e:
+            logger.warning("Could not load federations from S3: %s", e)
+
+    json_sample_uri = build_s3_uri(bucket, output_prefix, "players_list_sample.json")
+    xml_uri = build_s3_uri(bucket, output_prefix, "players_list.xml")
+    report_uri = build_s3_uri(bucket, output_prefix, "players_list_report.json")
+
+    def _save(players, parse_stats, xml_content):
+        _save_results(
+            players,
+            parse_stats,
+            xml_content,
+            parquet_uri,
+            json_sample_uri,
+            xml_uri,
+            report_uri,
+            federations_path,
+        )
+
+    def _graceful_shutdown(signum, frame):
+        logger.warning("\nReceived interrupt, attempting graceful shutdown...")
+        state = _shutdown_state.get("state")
+        if state:
+            players, parse_stats, xml_content = state
+            if players:
+                _save(players, parse_stats, xml_content)
+        sys.exit(130 if signum == 2 else 0)
+
+    signal.signal(signal.SIGINT, _graceful_shutdown)
+    signal.signal(signal.SIGTERM, _graceful_shutdown)
+
+    logger.info("Downloading FIDE players list from %s...", DOWNLOAD_URL)
+    start = time.time()
+
+    try:
+        zip_bytes = download_player_list()
+        players, parse_stats, xml_content = _process_zip_internal(zip_bytes)
+    except Exception as e:
+        logger.error("Error: %s", e)
+        return 1
+
+    if not players:
+        logger.error("No players parsed from XML")
+        return 1
+
+    _shutdown_state["state"] = (players, parse_stats, xml_content)
+    elapsed = time.time() - start
+    logger.info("Downloaded and parsed %d players in %.1fs", len(players), elapsed)
+
+    _save(players, parse_stats, xml_content)
+    if players:
+        logger.info("Sample row keys: %s", list(players[0].keys()))
+
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description="Download FIDE Combined Rating List (STD, BLZ, RPD) and save as parquet"
+    )
+    parser.add_argument(
+        "--output-prefix",
+        type=str,
+        default=None,
+        help="S3 output prefix (e.g. data). When set, writes to S3 instead of local.",
+    )
+    parser.add_argument(
+        "--bucket",
+        type=str,
+        default="fide-glicko",
+        help="S3 bucket (only used with --output-prefix)",
     )
     parser.add_argument(
         "--directory",
         "-d",
         type=str,
         default="data",
-        help="Directory to output results (default: 'data' from repo root)",
+        help="Directory to output results (default: src/data when -d data)",
     )
     parser.add_argument(
         "--override",
@@ -550,7 +698,7 @@ def main() -> int:
         "-f",
         type=str,
         default="",
-        help="Path to federations CSV for non-standard fed check (default: data/federations.csv from repo root)",
+        help="Path to federations CSV for non-standard fed check (default: data/federations.csv)",
     )
     parser.add_argument(
         "--report",
@@ -566,7 +714,21 @@ def main() -> int:
     else:
         logging.getLogger().setLevel(logging.INFO)
 
-    # Output paths: src/data (data folder in src)
+    if args.output_prefix is not None:
+        fed_uri = (
+            args.federations
+            if args.federations and is_s3_path(args.federations)
+            else build_s3_uri(args.bucket, "data", "federations.csv")
+        )
+        return run(
+            output_prefix=args.output_prefix,
+            bucket=args.bucket,
+            override=args.override,
+            quiet=args.quiet,
+            federations_s3_uri=fed_uri,
+        )
+
+    # Local output (original behavior)
     src_dir = Path(__file__).resolve().parent.parent
     repo_root = src_dir.parent
     output_dir = (
@@ -589,34 +751,22 @@ def main() -> int:
         logger.info("File %s already exists. Use --override to replace.", parquet_path)
         return 0
 
-    def _save_results(players, parse_stats, xml_content):
-        """Write all output files."""
-        df = pd.DataFrame(players)
-        if df.empty:
-            logger.warning("No players to save")
-            return
-        df = df[["byear", "id", "fed", "name", "sex", "title", "w_title"]]
-        df.to_parquet(parquet_path, index=False)
-        with open(xml_path, "wb") as f:
-            f.write(xml_content)
-        sample = players[:100]
-        with open(json_sample_path, "w", encoding="utf-8") as f:
-            json.dump(sample, f, indent=2, default=str)
-        report = build_report(players, parse_stats, federations_path)
-        with open(report_path, "w", encoding="utf-8") as f:
-            json.dump(report, f, indent=2, default=str)
-        logger.info("Saved parquet: %s", parquet_path)
-        logger.info("Saved XML: %s", xml_path)
-        logger.info("Saved JSON sample: %s", json_sample_path)
-        logger.info("Saved report: %s", report_path)
-
     def _graceful_shutdown(signum, frame):
         logger.warning("\nReceived interrupt, attempting graceful shutdown...")
         state = _shutdown_state.get("state")
         if state:
             players, parse_stats, xml_content = state
             if players:
-                _save_results(players, parse_stats, xml_content)
+                _save_results(
+                    players,
+                    parse_stats,
+                    xml_content,
+                    parquet_path,
+                    json_sample_path,
+                    xml_path,
+                    report_path,
+                    federations_path,
+                )
         sys.exit(130 if signum == 2 else 0)
 
     signal.signal(signal.SIGINT, _graceful_shutdown)
@@ -640,7 +790,16 @@ def main() -> int:
     elapsed = time.time() - start
     logger.info("Downloaded and parsed %d players in %.1fs", len(players), elapsed)
 
-    _save_results(players, parse_stats, xml_content)
+    _save_results(
+        players,
+        parse_stats,
+        xml_content,
+        parquet_path,
+        json_sample_path,
+        xml_path,
+        report_path,
+        federations_path,
+    )
     if players:
         logger.info("Sample row keys: %s", list(players[0].keys()))
 

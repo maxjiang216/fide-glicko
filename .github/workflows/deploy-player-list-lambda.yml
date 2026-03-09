@@ -1,0 +1,36 @@
+# Deploy player list Lambda to AWS when relevant files change.
+#
+# Same OIDC/secret setup as deploy-federations-lambda.
+#
+name: Deploy Player List Lambda
+
+on:
+  push:
+    branches: [main, master]
+    paths:
+      - "src/scraper/get_player_list.py"
+      - "src/scraper/s3_io.py"
+      - "handlers/player_list.py"
+      - "infra/deploy_player_list_lambda.sh"
+      - "pyproject.toml"
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION || 'us-east-1' }}
+
+      - name: Build and deploy Lambda
+        env:
+          LAMBDA_ROLE_ARN: ${{ secrets.LAMBDA_ROLE_ARN }}
+        run: ./infra/deploy_player_list_lambda.sh
