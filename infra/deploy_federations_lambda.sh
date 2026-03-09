@@ -17,6 +17,7 @@ FUNCTION_NAME="${FUNCTION_NAME:-fide-glicko-federations}"
 RUNTIME="python3.12"
 HANDLER="handlers.federations.lambda_handler"
 TIMEOUT=60
+TIMEOUT=60
 MEMORY=256
 
 mkdir -p "$BUILD_DIR"
@@ -52,6 +53,12 @@ if aws lambda get-function --function-name "$FUNCTION_NAME" 2>/dev/null; then
   aws lambda update-function-code \
     --function-name "$FUNCTION_NAME" \
     --zip-file "fileb://$ZIP_PATH"
+  aws lambda update-function-configuration \
+    --function-name "$FUNCTION_NAME" \
+    --timeout "$TIMEOUT" \
+    --memory-size "$MEMORY"
+  echo "Waiting for code update to complete..."
+  aws lambda wait function-updated --function-name "$FUNCTION_NAME"
   aws lambda update-function-configuration \
     --function-name "$FUNCTION_NAME" \
     --timeout "$TIMEOUT" \
