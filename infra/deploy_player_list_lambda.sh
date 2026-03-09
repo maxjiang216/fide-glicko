@@ -18,7 +18,8 @@ FUNCTION_NAME="${FUNCTION_NAME:-fide-glicko-player-list}"
 RUNTIME="python3.12"
 HANDLER="handlers.player_list.lambda_handler"
 TIMEOUT=300
-MEMORY=6144
+# AWS account limit may cap at 3008 MB; if OOM, request quota increase or optimize parsing
+MEMORY=3008
 
 mkdir -p "$BUILD_DIR"
 rm -rf "$BUILD_DIR"/*
