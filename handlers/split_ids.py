@@ -43,7 +43,9 @@ def lambda_handler(event: dict, context) -> dict:
     output_prefix = event.get("output_prefix", "data")
     ids_uri = event.get("ids_uri")
     invoke_tournaments = event.get("invoke_tournaments", False)
-    tournaments_function_name = event.get("tournaments_function_name", "fide-glicko-tournaments")
+    tournaments_function_name = event.get(
+        "tournaments_function_name", "fide-glicko-tournaments"
+    )
     chunk_count = event.get("chunk_count", 50)
     override = event.get("override", False)
 
@@ -63,7 +65,10 @@ def lambda_handler(event: dict, context) -> dict:
     if invoke_tournaments or not output_exists(ids_uri):
         logger.info(
             "Invoking tournaments Lambda for %d-%02d (invoke_tournaments=%s, ids_exist=%s)",
-            year, month, invoke_tournaments, output_exists(ids_uri),
+            year,
+            month,
+            invoke_tournaments,
+            output_exists(ids_uri),
         )
         if not invoke_tournaments_lambda(
             year=year,
@@ -83,7 +88,10 @@ def lambda_handler(event: dict, context) -> dict:
 
     logger.info(
         "Splitting IDs from %s into %d chunks (bucket=%s prefix=%s)",
-        ids_uri, chunk_count, bucket, output_prefix,
+        ids_uri,
+        chunk_count,
+        bucket,
+        output_prefix,
     )
 
     chunks = run(

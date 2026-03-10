@@ -26,6 +26,7 @@ logger = logging.getLogger(__name__)
 def _is_s3(path: str) -> bool:
     try:
         from s3_io import is_s3_path
+
         return is_s3_path(path)
     except ImportError:
         return path.strip().lower().startswith("s3://")
@@ -35,6 +36,7 @@ def _read_ids(path: str) -> List[str]:
     """Read tournament IDs from file (local or S3)."""
     if _is_s3(path):
         from s3_io import download_to_file
+
         local = Path(tempfile.gettempdir()) / "tournament_ids_split.txt"
         download_to_file(path, local)
         path = str(local)
@@ -51,6 +53,7 @@ def _write_chunk(content: str, path: str) -> None:
     """Write chunk content to path (local or S3)."""
     if _is_s3(path):
         from s3_io import write_output
+
         write_output(content, path)
     else:
         p = Path(path)
@@ -63,6 +66,7 @@ def _output_exists(path: str) -> bool:
     if _is_s3(path):
         try:
             from s3_io import output_exists
+
             return output_exists(path)
         except ImportError:
             return False
@@ -163,21 +167,29 @@ def run(
             chunk_input_path = str(chunks_dir / f"{year_month}_{chunk_prefix}_{i}")
             # Match S3 layout: .../tournament_details/YYYY_MM_part_N (flat)
             ids_dir_str = str(chunks_dir)
-            details_dir = Path(ids_dir_str.replace("tournament_ids", "tournament_details"))
-            chunk_output_path = str(details_dir / f"{year_month}_{output_part_prefix}_{i}")
+            details_dir = Path(
+                ids_dir_str.replace("tournament_ids", "tournament_details")
+            )
+            chunk_output_path = str(
+                details_dir / f"{year_month}_{output_part_prefix}_{i}"
+            )
 
         if not override and _output_exists(chunk_input_path):
             logger.info("Chunk %d already exists, skipping write", i)
         else:
             _write_chunk(chunk_content, chunk_input_path)
-            logger.info("Wrote chunk %d (%d IDs) -> %s", i, len(chunk_ids), chunk_input_path)
+            logger.info(
+                "Wrote chunk %d (%d IDs) -> %s", i, len(chunk_ids), chunk_input_path
+            )
 
-        result.append({
-            "input_path": chunk_input_path,
-            "output_path": chunk_output_path,
-            "tournament_count": len(chunk_ids),
-            "chunk_index": i,
-        })
+        result.append(
+            {
+                "input_path": chunk_input_path,
+                "output_path": chunk_output_path,
+                "tournament_count": len(chunk_ids),
+                "chunk_index": i,
+            }
+        )
 
     return result
 
@@ -266,7 +278,8 @@ def main() -> int:
         help="Overwrite existing chunk files",
     )
     parser.add_argument(
-        "-q", "--quiet",
+        "-q",
+        "--quiet",
         action="store_true",
         help="Reduce log output",
     )
