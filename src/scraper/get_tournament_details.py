@@ -7,12 +7,14 @@ Supports rate limiting, retries, checkpoints, and progress tracking.
 """
 
 import argparse
+import io
 import json
 import logging
 import os
 import random
 import signal
 import sys
+import tempfile
 import time
 from collections import Counter
 from datetime import datetime
@@ -54,6 +56,42 @@ class RateLimiter:
 
     def get_rate(self) -> float:
         return 1.0 / self.min_interval
+
+
+# Optional S3 support (used by run() when paths are S3 URIs)
+def _is_s3(path: str) -> bool:
+    try:
+        from s3_io import is_s3_path
+
+        return is_s3_path(path)
+    except ImportError:
+        return path.strip().lower().startswith("s3://")
+
+
+def _write_to_path(path: str, content: bytes | str) -> None:
+    """Write content to path (local or S3)."""
+    if _is_s3(path):
+        from s3_io import write_output
+
+        write_output(content, path)
+    else:
+        p = Path(path)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        if isinstance(content, str):
+            p.write_text(content, encoding="utf-8")
+        else:
+            p.write_bytes(content)
+
+
+def _read_ids_from_path(path: str) -> List[str]:
+    """Read tournament IDs from a file (local or S3)."""
+    if _is_s3(path):
+        from s3_io import download_to_file
+
+        local_path = Path(tempfile.gettempdir()) / "tournament_ids.txt"
+        download_to_file(path, local_path)
+        path = str(local_path)
+    return read_tournament_ids(path)
 
 
 def format_duration(seconds: float) -> str:
@@ -510,14 +548,13 @@ def save_time_control_unique_values(results: List[Dict], output_path: str):
         logger.error(f"Time control unique values save failed: {e}")
 
 
-def save_results_parquet(results: List[Dict], parquet_path: str):
-    """Save results as Parquet file."""
+def save_results_parquet(results: List[Dict], parquet_path: str) -> None:
+    """Save results as Parquet file (local or S3)."""
     try:
         df = results_to_dataframe(results)
-        dirname = os.path.dirname(parquet_path)
-        if dirname:
-            os.makedirs(dirname, exist_ok=True)
-        df.to_parquet(parquet_path, index=False, engine="pyarrow")
+        buf = io.BytesIO()
+        df.to_parquet(buf, index=False, engine="pyarrow")
+        _write_to_path(parquet_path, buf.getvalue())
         logger.info(f"Saved {len(results)} records to {parquet_path}")
     except Exception as e:
         logger.error(f"Parquet save failed: {e}")
@@ -525,30 +562,37 @@ def save_results_parquet(results: List[Dict], parquet_path: str):
 
 def save_results_json_sample(
     results: List[Dict], json_path: str, sample_size: int = 100
-):
-    """Save a random sample of flattened results (processed format) as JSON file."""
+) -> None:
+    """Save a random sample of flattened results (processed format) as JSON (local or S3)."""
     try:
-        # Filter to successful results only for the sample
         successful_results = [r for r in results if r.get("success", False)]
-
-        if len(successful_results) == 0:
+        if not successful_results:
             logger.warning("No successful results to sample for JSON")
             return
-
-        # Sample up to sample_size records and flatten (same schema as parquet)
         sample = random.sample(
             successful_results, min(sample_size, len(successful_results))
         )
         flattened = [flatten_result(r) for r in sample]
-
-        dirname = os.path.dirname(json_path)
-        if dirname:
-            os.makedirs(dirname, exist_ok=True)
-        with open(json_path, "w", encoding="utf-8") as f:
-            json.dump(flattened, f, indent=2, ensure_ascii=False, default=str)
+        content = json.dumps(flattened, indent=2, ensure_ascii=False, default=str)
+        _write_to_path(json_path, content)
         logger.info(f"Saved random sample of {len(flattened)} records to {json_path}")
     except Exception as e:
         logger.error(f"JSON sample save failed: {e}")
+
+
+def save_failures_json(results: List[Dict], base_path: str) -> None:
+    """Save failed tournament IDs and errors to JSON for investigation (local or S3)."""
+    failures = [
+        {"tournament_id": r["tournament_id"], "error": r.get("error", "")}
+        for r in results
+        if not r.get("success", False)
+    ]
+    if not failures:
+        return
+    path = base_path.rstrip(".parquet") + "_failures.json"
+    content = json.dumps(failures, indent=2, ensure_ascii=False)
+    _write_to_path(path, content)
+    logger.info(f"Saved {len(failures)} failures to {path}")
 
 
 def build_and_save_report(
@@ -663,26 +707,175 @@ def build_and_save_report(
     report_path = base + "_report.json"
     time_control_path = base + "_time_control_unique_values.txt"
 
-    dirname = os.path.dirname(report_path)
-    if dirname:
-        os.makedirs(dirname, exist_ok=True)
-
-    with open(report_path, "w", encoding="utf-8") as f:
-        json.dump(report, f, indent=2, ensure_ascii=False)
+    report_content = json.dumps(report, indent=2, ensure_ascii=False)
+    _write_to_path(report_path, report_content)
     logger.info(f"Saved report to {report_path}")
 
-    # Time control unique values (raw, one per line for parsing analysis)
     raw_tc = [
         r.get("details", {}).get("time_control", "")
         for r in successful
         if r.get("details", {}).get("time_control")
     ]
     unique_tc = sorted(set(v.strip() for v in raw_tc if v and str(v).strip()), key=str)
-    with open(time_control_path, "w", encoding="utf-8") as f:
-        f.write("\n".join(unique_tc))
+    _write_to_path(time_control_path, "\n".join(unique_tc))
     logger.info(
         f"Saved {len(unique_tc)} unique raw time_control values to {time_control_path}"
     )
+
+
+def run(
+    input_path: str,
+    output_path: str,
+    rate_limit: float = 0.5,
+    max_retries: int = 3,
+    checkpoint: int = 0,
+    quiet: bool = False,
+    limit: int = 0,
+) -> int:
+    """
+    Scrape tournament details for IDs from input_path, write to output_path.
+
+    Args:
+        input_path: Path to tournament IDs file (one ID per line). Local or S3 URI.
+        output_path: Base output path (local or S3). Writes output_path.parquet,
+            output_path_sample.json, output_path_report.json, output_path_failures.json.
+        rate_limit: Requests per second.
+        max_retries: Retry passes for failed fetches.
+        checkpoint: Save checkpoint every N successful (0 = disabled).
+        quiet: Reduce log output.
+        limit: Process only first N IDs (0 = all).
+
+    Returns:
+        0 on success, 1 on failure.
+    """
+    if quiet:
+        logging.getLogger().setLevel(logging.WARNING)
+
+    base = (
+        output_path.replace(".parquet", "")
+        if output_path.endswith(".parquet")
+        else output_path
+    )
+    parquet_path = base + ".parquet"
+    json_path = base + "_sample.json"
+
+    try:
+        tournament_ids = _read_ids_from_path(input_path)
+    except Exception as e:
+        logger.error("Error reading IDs from %s: %s", input_path, e)
+        return 1
+
+    if not tournament_ids:
+        logger.error("No tournament IDs found in %s", input_path)
+        return 1
+
+    if limit > 0:
+        tournament_ids = tournament_ids[:limit]
+        logger.info("Limited to first %d tournaments", limit)
+
+    logger.info(
+        "Processing %d tournaments from %s -> %s",
+        len(tournament_ids),
+        input_path,
+        parquet_path,
+    )
+
+    session = requests.Session()
+    adapter = requests.adapters.HTTPAdapter(
+        pool_connections=1, pool_maxsize=1, max_retries=0
+    )
+    session.mount("http://", adapter)
+    session.mount("https://", adapter)
+    rate_limiter = RateLimiter(rate_limit)
+
+    all_results: List[Dict] = []
+    success_count = 0
+    error_count = 0
+    total_retries = 0
+    current_tournaments = tournament_ids
+
+    pbar = None
+    if not quiet:
+        pbar = tqdm(
+            total=len(tournament_ids),
+            desc="Processing",
+            unit="tournament",
+            bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}]",
+        )
+
+    start_time = time.time()
+
+    for pass_num in range(max_retries + 1):
+        if not current_tournaments:
+            break
+        if pass_num > 0:
+            delay = 3 * (2 ** (pass_num - 1))
+            logger.info(
+                "Retry pass %d: waiting %s before retrying %d tournaments",
+                pass_num,
+                format_duration(delay),
+                len(current_tournaments),
+            )
+            time.sleep(delay)
+            total_retries += len(current_tournaments)
+
+        pass_failed = []
+        for tournament_id in current_tournaments:
+            rate_limiter.wait()
+            details, error, _ = fetch_tournament_details(tournament_id, session)
+
+            result = {"tournament_id": tournament_id}
+            if details is None:
+                error_count += 1
+                result["success"] = False
+                result["error"] = error or "fetch failed"
+                error_lower = (error or "").lower()
+                network_error_patterns = [
+                    "eof",
+                    "connection reset",
+                    "connection aborted",
+                    "remotedisconnected",
+                    "remote end closed",
+                    "broken pipe",
+                ]
+                is_network_error = any(p in error_lower for p in network_error_patterns)
+                if (
+                    error
+                    and (is_network_error or "timeout" in error_lower)
+                    and pass_num < max_retries
+                ):
+                    pass_failed.append(tournament_id)
+            else:
+                success_count += 1
+                result["success"] = True
+                result["details"] = details
+                if checkpoint > 0 and success_count % checkpoint == 0:
+                    save_checkpoint(parquet_path, all_results, base + ".checkpoint")
+
+            all_results.append(result)
+            if pbar:
+                pbar.update(1)
+                pbar.set_postfix({"✓": success_count, "✗": error_count})
+
+        current_tournaments = pass_failed
+
+    if pbar:
+        pbar.close()
+
+    save_results_parquet(all_results, parquet_path)
+    save_results_json_sample(all_results, json_path, sample_size=100)
+    if success_count > 0:
+        build_and_save_report(all_results, parquet_path)
+    save_failures_json(all_results, base)
+
+    elapsed = time.time() - start_time
+    logger.info(
+        "Done: %d success, %d errors in %s",
+        success_count,
+        error_count,
+        format_duration(elapsed),
+    )
+    return 0
 
 
 def save_checkpoint(
@@ -1048,6 +1241,8 @@ def main():
 
         # Build and save report (distributions, nulls, time_control unique values)
         build_and_save_report(all_results, parquet_path)
+        # Save failures for investigation
+        save_failures_json(all_results, parquet_path)
     else:
         # If no output path specified, dump to stdout as JSON (for backwards compatibility)
         json.dump(all_results, sys.stdout, indent=2, ensure_ascii=False)
