@@ -1,0 +1,56 @@
+# Deploy tournament details chunk Lambda to AWS when relevant files change.
+#
+# Same OIDC/secret setup as deploy-federations-lambda.
+#
+name: Deploy Details Chunk Lambda
+
+on:
+  push:
+    branches: [main, master]
+    paths:
+      - "src/scraper/get_tournament_details.py"
+      - "src/scraper/s3_io.py"
+      - "handlers/details_chunk.py"
+      - "infra/deploy_details_chunk_lambda.sh"
+      - "pyproject.toml"
+  pull_request:
+    paths:
+      - "src/scraper/get_tournament_details.py"
+      - "src/scraper/s3_io.py"
+      - "handlers/details_chunk.py"
+      - "infra/deploy_details_chunk_lambda.sh"
+      - ".github/workflows/deploy-details-chunk-lambda.yml"
+      - "pyproject.toml"
+  workflow_dispatch:
+    inputs:
+      deploy:
+        description: "Deploy to AWS (false = build only, no AWS needed)"
+        required: false
+        default: false
+        type: boolean
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        if: github.event_name == 'push' || github.event.inputs.deploy == 'true'
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION || 'us-east-1' }}
+
+      - name: Build and deploy Lambda
+        env:
+          LAMBDA_ROLE_ARN: ${{ secrets.LAMBDA_ROLE_ARN }}
+        run: |
+          if [[ "${{ github.event_name }}" == "push" || "${{ github.event.inputs.deploy }}" == "true" ]]; then
+            bash infra/deploy_details_chunk_lambda.sh
+          else
+            bash infra/deploy_details_chunk_lambda.sh --zip-only
+          fi
