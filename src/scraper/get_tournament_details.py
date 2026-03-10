@@ -62,6 +62,7 @@ class RateLimiter:
 def _is_s3(path: str) -> bool:
     try:
         from s3_io import is_s3_path
+
         return is_s3_path(path)
     except ImportError:
         return path.strip().lower().startswith("s3://")
@@ -71,6 +72,7 @@ def _write_to_path(path: str, content: bytes | str) -> None:
     """Write content to path (local or S3)."""
     if _is_s3(path):
         from s3_io import write_output
+
         write_output(content, path)
     else:
         p = Path(path)
@@ -85,6 +87,7 @@ def _read_ids_from_path(path: str) -> List[str]:
     """Read tournament IDs from a file (local or S3)."""
     if _is_s3(path):
         from s3_io import download_to_file
+
         local_path = Path(tempfile.gettempdir()) / "tournament_ids.txt"
         download_to_file(path, local_path)
         path = str(local_path)
@@ -748,7 +751,11 @@ def run(
     if quiet:
         logging.getLogger().setLevel(logging.WARNING)
 
-    base = output_path.replace(".parquet", "") if output_path.endswith(".parquet") else output_path
+    base = (
+        output_path.replace(".parquet", "")
+        if output_path.endswith(".parquet")
+        else output_path
+    )
     parquet_path = base + ".parquet"
     json_path = base + "_sample.json"
 
@@ -766,7 +773,12 @@ def run(
         tournament_ids = tournament_ids[:limit]
         logger.info("Limited to first %d tournaments", limit)
 
-    logger.info("Processing %d tournaments from %s -> %s", len(tournament_ids), input_path, parquet_path)
+    logger.info(
+        "Processing %d tournaments from %s -> %s",
+        len(tournament_ids),
+        input_path,
+        parquet_path,
+    )
 
     session = requests.Session()
     adapter = requests.adapters.HTTPAdapter(
@@ -800,7 +812,9 @@ def run(
             delay = 3 * (2 ** (pass_num - 1))
             logger.info(
                 "Retry pass %d: waiting %s before retrying %d tournaments",
-                pass_num, format_duration(delay), len(current_tournaments),
+                pass_num,
+                format_duration(delay),
+                len(current_tournaments),
             )
             time.sleep(delay)
             total_retries += len(current_tournaments)
@@ -817,11 +831,19 @@ def run(
                 result["error"] = error or "fetch failed"
                 error_lower = (error or "").lower()
                 network_error_patterns = [
-                    "eof", "connection reset", "connection aborted",
-                    "remotedisconnected", "remote end closed", "broken pipe",
+                    "eof",
+                    "connection reset",
+                    "connection aborted",
+                    "remotedisconnected",
+                    "remote end closed",
+                    "broken pipe",
                 ]
                 is_network_error = any(p in error_lower for p in network_error_patterns)
-                if error and (is_network_error or "timeout" in error_lower) and pass_num < max_retries:
+                if (
+                    error
+                    and (is_network_error or "timeout" in error_lower)
+                    and pass_num < max_retries
+                ):
                     pass_failed.append(tournament_id)
             else:
                 success_count += 1
@@ -849,7 +871,9 @@ def run(
     elapsed = time.time() - start_time
     logger.info(
         "Done: %d success, %d errors in %s",
-        success_count, error_count, format_duration(elapsed),
+        success_count,
+        error_count,
+        format_duration(elapsed),
     )
     return 0
 
