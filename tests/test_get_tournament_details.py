@@ -24,7 +24,7 @@ class TestFixtureBasedParsing:
         session = MagicMock()
         session.get.return_value = mock_response
 
-        details, error, _ = fetch_tournament_details("368261", session)
+        details, error, _, _ = fetch_tournament_details("368261", session)
 
         assert error is None
         assert details is not None
@@ -55,7 +55,7 @@ class TestFixtureBasedParsing:
         mock_session = MagicMock()
         mock_session.get.return_value = mock_response
 
-        details_fixture, error_fixture, _ = fetch_tournament_details(
+        details_fixture, error_fixture, _, _ = fetch_tournament_details(
             "368261", mock_session
         )
         assert error_fixture is None
@@ -63,7 +63,9 @@ class TestFixtureBasedParsing:
 
         # Fetch live from FIDE
         live_session = requests.Session()
-        details_live, error_live, _ = fetch_tournament_details("368261", live_session)
+        details_live, error_live, _, _ = fetch_tournament_details(
+            "368261", live_session
+        )
 
         assert error_live is None, f"Live fetch failed: {error_live}"
         assert details_live is not None
@@ -81,7 +83,7 @@ class TestFixtureBasedParsing:
         Run with: pytest -m online
         """
         session = requests.Session()
-        details, error, _ = fetch_tournament_details("368261", session)
+        details, error, _, _ = fetch_tournament_details("368261", session)
 
         assert error is None, f"Fetch failed: {error}"
         assert details is not None
