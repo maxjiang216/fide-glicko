@@ -32,7 +32,7 @@ All Lambdas accept **run_type**, **run_name**, **bucket**, **override** where ap
 - **year**, **month**: Required
 - **run_type**, **run_name**: As above
 - **federations_s3_uri**: Optional. Defaults to `{base}/data/federations.csv`
-- Outputs: `{base}/data/tournament_ids.txt`, `{base}/sample/tournament_ids_sample.json`, `{base}/raw/tournaments/{fed}.json.gz` (raw API JSON, gzip-9)
+- Outputs: `{base}/data/tournament_ids.txt`, `{base}/sample/tournament_ids_sample.json`, `{base}/raw/tournaments.json.gz` (raw API JSON, all federations concatenated, gzip-9)
 
 ### split_ids
 ```json
