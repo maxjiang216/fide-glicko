@@ -833,6 +833,7 @@ def run(
     raw_base: Optional[str] = (
         _raw_base_from_output_path(output_path) if save_raw else None
     )
+    raw_accumulator: List[Tuple[str, bytes]] = []  # (tournament_id, html)
 
     all_results: List[Dict] = []
     success_count = 0
@@ -898,8 +899,7 @@ def run(
                 result["success"] = True
                 result["details"] = details
                 if raw_base and raw_content:
-                    raw_path = f"{raw_base}/{tournament_id}.html.gz"
-                    _write_to_path(raw_path, _compress_gzip(raw_content))
+                    raw_accumulator.append((tournament_id, raw_content))
                 if checkpoint > 0 and success_count % checkpoint == 0:
                     save_checkpoint(parquet_path, all_results, base + ".checkpoint")
 
@@ -912,6 +912,17 @@ def run(
 
     if pbar:
         pbar.close()
+
+    if raw_base and raw_accumulator:
+        from raw_utils import build_concatenated_gzip
+
+        raw_path = raw_base + ".html.gz"
+        _write_to_path(raw_path, build_concatenated_gzip(raw_accumulator))
+        logger.info(
+            "Saved concatenated raw HTML (%d tournaments) to %s",
+            len(raw_accumulator),
+            raw_path,
+        )
 
     save_results_parquet(all_results, parquet_path)
     save_results_json_sample(all_results, json_path, sample_size=100)
