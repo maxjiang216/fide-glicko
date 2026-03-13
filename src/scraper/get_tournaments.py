@@ -9,7 +9,6 @@ requests to the JSON endpoints, which is much faster than using a headless brows
 import argparse
 import asyncio
 import csv
-import gzip
 import io
 import json
 import logging
@@ -24,6 +23,7 @@ from typing import List, Optional, Tuple, Union
 
 import aiohttp
 
+from raw_utils import build_concatenated_gzip
 from s3_io import (
     build_local_path_for_run,
     build_s3_uri,
@@ -448,22 +448,12 @@ def graceful_shutdown(signum: int, frame) -> None:
     sys.exit(0)
 
 
-def _compress_gzip(data: bytes, level: int = 9) -> bytes:
-    """Compress with gzip level 9. Same as players raw."""
-    buf = io.BytesIO()
-    with gzip.GzipFile(fileobj=buf, mode="wb", compresslevel=level) as z:
-        z.write(data)
-    return buf.getvalue()
-
-
-def _raw_base_from_ids_uri(ids_uri: str) -> Optional[str]:
-    """Derive raw/tournaments base from ids_uri. Returns None if not derivable."""
+def _raw_tournaments_uri_from_ids_uri(ids_uri: str) -> Optional[str]:
+    """Derive raw/tournaments.json.gz URI from ids_uri. Returns None if not derivable."""
     suffix = "/data/tournament_ids.txt"
     if ids_uri.endswith(suffix):
-        base = ids_uri[
-            : -len(suffix)
-        ]  # run base e.g. data/test or s3://bucket/prod/2024-01
-        return f"{base}/raw/tournaments"
+        base = ids_uri[: -len(suffix)]
+        return f"{base}/raw/tournaments.json.gz"
     return None
 
 
@@ -509,7 +499,7 @@ async def scrape_month(
         max_retries: Maximum number of retries per federation.
         retry_delay: Base delay in seconds between retries.
         save_raw: If True and output uses data/tournament_ids.txt structure, save raw
-            JSON per federation to raw/tournaments/{code}.json.gz (gzip-9).
+            JSON from all federations concatenated to raw/tournaments.json.gz (gzip-9).
 
     Returns:
         List of unique Tournament objects.
@@ -548,12 +538,13 @@ async def scrape_month(
 
     semaphore = asyncio.Semaphore(max_concurrency)
 
-    raw_base_uri: Optional[str] = (
-        _raw_base_from_ids_uri(str(output_path)) if save_raw else None
+    raw_tournaments_uri: Optional[str] = (
+        _raw_tournaments_uri_from_ids_uri(str(output_path)) if save_raw else None
     )
 
     # Collect results
     all_tournaments: List[Tournament] = []
+    raw_items: List[Tuple[str, bytes]] = []
     errors = []
     federation_counts = {}
     processed_count = 0
@@ -580,10 +571,8 @@ async def scrape_month(
             code, name, tournaments, error, raw_text = await coro
             processed_count += 1
 
-            if raw_base_uri and not error and raw_text:
-                raw_uri = f"{raw_base_uri}/{code}.json.gz"
-                compressed = _compress_gzip(raw_text.encode("utf-8"))
-                write_output(compressed, raw_uri)
+            if raw_tournaments_uri and not error and raw_text:
+                raw_items.append((code, raw_text.encode("utf-8")))
 
             # Update shutdown state
             _shutdown_state["all_tournaments"] = all_tournaments
@@ -614,6 +603,11 @@ async def scrape_month(
                         format_time(elapsed),
                         format_time(remaining),
                     )
+
+    # Write concatenated raw JSON from all federations (single file to reduce PUT costs)
+    if raw_tournaments_uri and raw_items:
+        compressed = build_concatenated_gzip(raw_items)
+        write_output(compressed, raw_tournaments_uri)
 
     # Deduplicate by tournament_id
     seen_ids = set()
