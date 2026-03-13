@@ -27,6 +27,7 @@ Returns: { statusCode, success, chunks: [{ input_path, output_path, tournament_c
 
 import logging
 
+from .lambda_logging import configure
 from s3_io import (
     build_run_base,
     build_s3_uri_for_run,
@@ -40,6 +41,7 @@ logger = logging.getLogger(__name__)
 
 def lambda_handler(event: dict, context) -> dict:
     """Lambda entry point for splitting tournament IDs into chunks."""
+    configure()
     year = event.get("year")
     month = event.get("month")
     run_type = event.get("run_type", "custom")

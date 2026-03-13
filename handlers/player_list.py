@@ -16,12 +16,13 @@ Event shape:
 - override: If true, overwrite existing files
 - federations_s3_uri: Optional. Defaults to {base}/data/federations.csv.
 
-Outputs: {base}/data/players_list.parquet, {base}/data/players_list.xml,
+Outputs: {base}/data/players_list.parquet, {base}/raw/players_list.xml.gz,
 {base}/sample/players_list_sample.json, {base}/reports/players_list_report.json
 """
 
 import logging
 
+from .lambda_logging import configure
 from s3_io import (
     build_run_base,
     build_s3_uri_for_run,
@@ -35,6 +36,7 @@ logger = logging.getLogger(__name__)
 
 def lambda_handler(event: dict, context) -> dict:
     """Lambda entry point for player list download."""
+    configure()
     run_type = event.get("run_type", "custom")
     run_name = event.get("run_name")
     bucket = event.get("bucket", "fide-glicko")

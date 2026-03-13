@@ -19,6 +19,7 @@ Event shape:
 
 import logging
 
+from .lambda_logging import configure
 from s3_io import build_s3_uri_for_run
 from get_tournament_details import run
 
@@ -41,6 +42,7 @@ def _derive_sample_and_reports_paths(output_path: str) -> tuple[str | None, str 
 
 def lambda_handler(event: dict, context) -> dict:
     """Lambda entry point for tournament details chunk scraper."""
+    configure()
     run_type = event.get("run_type", "custom")
     run_name = event.get("run_name")
     chunk_index = event.get("chunk_index")

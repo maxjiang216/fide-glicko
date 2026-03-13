@@ -495,7 +495,7 @@ async def scrape_month(
     # Read federations
     try:
         federations = read_federations(federations_path)
-        logger.info(f"Read {len(federations)} federations from {federations_path}")
+        logger.info("Read %d federations from %s", len(federations), federations_path)
     except Exception as e:
         logger.error(f"Error reading federations: {e}")
         return []
@@ -566,7 +566,7 @@ async def scrape_month(
                     logger.info(f"{code} ({name}): {len(tournaments)} tournaments")
                 all_tournaments.extend(tournaments)
 
-            # Progress update
+            # Progress update (print+flush for CloudWatch when Lambda times out)
             if processed_count % 10 == 0 or processed_count == len(federations):
                 elapsed = time.time() - start_time
                 progress_pct = (processed_count / len(federations)) * 100
@@ -574,9 +574,12 @@ async def scrape_month(
                     avg_time = elapsed / processed_count
                     remaining = avg_time * (len(federations) - processed_count)
                     logger.info(
-                        f"[{processed_count}/{len(federations)} ({progress_pct:.1f}%)] "
-                        f"Elapsed: {format_time(elapsed)}, "
-                        f"Est. remaining: {format_time(remaining)}"
+                        "[%d/%d (%.1f%%)] Elapsed: %s, Est. remaining: %s",
+                        processed_count,
+                        len(federations),
+                        progress_pct,
+                        format_time(elapsed),
+                        format_time(remaining),
                     )
 
     # Deduplicate by tournament_id

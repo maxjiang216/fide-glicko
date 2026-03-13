@@ -17,7 +17,8 @@ ZIP_PATH="$REPO_ROOT/build/tournaments_lambda.zip"
 FUNCTION_NAME="${FUNCTION_NAME:-fide-glicko-tournaments}"
 RUNTIME="python3.12"
 HANDLER="handlers.tournaments.lambda_handler"
-TIMEOUT=300
+# 15 min max; ~200 federations * requests can exceed 5 min when FIDE is slow
+TIMEOUT=900
 MEMORY=512
 
 mkdir -p "$BUILD_DIR"
@@ -76,4 +77,5 @@ else
 fi
 
 echo "Done. Invoke with:"
-echo "  aws lambda invoke --function-name $FUNCTION_NAME --payload '{\"year\":2025,\"month\":3,\"bucket\":\"fide-glicko\",\"output_prefix\":\"data\"}' out.json && cat out.json"
+echo "  aws lambda invoke --function-name $FUNCTION_NAME --payload '{\"year\":2025,\"month\":3,\"run_type\":\"custom\",\"run_name\":\"2025-03\",\"bucket\":\"fide-glicko\"}' out.json && cat out.json"
+echo "Logs: CloudWatch → Log groups → /aws/lambda/$FUNCTION_NAME"

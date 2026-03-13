@@ -19,6 +19,7 @@ Output: s3://{bucket}/{run_type}/{run_name}/data/federations.csv
 
 import logging
 
+from .lambda_logging import configure
 from s3_io import (
     build_run_base,
     build_s3_uri_for_run,
@@ -32,6 +33,7 @@ logger = logging.getLogger(__name__)
 
 def lambda_handler(event: dict, context) -> dict:
     """Lambda entry point for federations scraper."""
+    configure()
     run_type = event.get("run_type", "custom")
     run_name = event.get("run_name")
     bucket = event.get("bucket", "fide-glicko")

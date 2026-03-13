@@ -9,6 +9,8 @@ XML avoids fixed-width ambiguity (e.g. OTIT overflow in TXT).
 
 import argparse
 import csv
+import gzip
+import io
 import logging
 import signal
 import sys
@@ -548,6 +550,14 @@ def build_report(
     return report
 
 
+def _compress_xml_gzip(xml_content: bytes, level: int = 9) -> bytes:
+    """Compress XML with gzip. Level 9 gives ~5% of original for FIDE players_list.xml."""
+    buf = io.BytesIO()
+    with gzip.GzipFile(fileobj=buf, mode="wb", compresslevel=level) as z:
+        z.write(xml_content)
+    return buf.getvalue()
+
+
 def _save_results(
     players: list[dict[str, Any]],
     parse_stats: dict[str, Any],
@@ -558,7 +568,7 @@ def _save_results(
     report_path: str | Path,
     federations_path: Path | None,
 ) -> None:
-    """Write all output files (local or S3)."""
+    """Write all output files (local or S3). XML is saved compressed in raw/."""
     df = pd.DataFrame(players)
     if df.empty:
         logger.warning("No players to save")
@@ -567,13 +577,14 @@ def _save_results(
     buf = BytesIO()
     df.to_parquet(buf, index=False)
     write_output(buf.getvalue(), str(parquet_path))
-    write_output(xml_content, str(xml_path))
+    compressed = _compress_xml_gzip(xml_content)
+    write_output(compressed, str(xml_path))
     sample = players[:100]
     write_output(json.dumps(sample, indent=2, default=str), str(json_sample_path))
     report = build_report(players, parse_stats, federations_path)
     write_output(json.dumps(report, indent=2, default=str), str(report_path))
     logger.info("Saved parquet: %s", parquet_path)
-    logger.info("Saved XML: %s", xml_path)
+    logger.info("Saved XML (gzip): %s", xml_path)
     logger.info("Saved JSON sample: %s", json_sample_path)
     logger.info("Saved report: %s", report_path)
 
@@ -634,7 +645,7 @@ def run(
         bucket, run_type, run_name, "sample", "players_list_sample.json"
     )
     xml_uri = build_s3_uri_for_run(
-        bucket, run_type, run_name, "data", "players_list.xml"
+        bucket, run_type, run_name, "raw", "players_list.xml.gz"
     )
     report_uri = build_s3_uri_for_run(
         bucket, run_type, run_name, "reports", "players_list_report.json"
@@ -803,7 +814,7 @@ def main() -> int:
             local_root, run_type, run_name or "", "sample", "players_list_sample.json"
         )
         xml_path = repo_root / build_local_path_for_run(
-            local_root, run_type, run_name or "", "data", "players_list.xml"
+            local_root, run_type, run_name or "", "raw", "players_list.xml.gz"
         )
         report_path = (
             Path(args.report)
@@ -834,7 +845,7 @@ def main() -> int:
         output_dir.mkdir(parents=True, exist_ok=True)
         parquet_path = output_dir / "players_list.parquet"
         json_sample_path = output_dir / "players_list_sample.json"
-        xml_path = output_dir / "players_list.xml"
+        xml_path = output_dir / "raw" / "players_list.xml.gz"
         report_path = (
             Path(args.report)
             if args.report

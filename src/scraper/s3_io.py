@@ -124,7 +124,7 @@ def build_s3_uri_for_run(
     subfolder: str,
     *path_parts: str,
 ) -> str:
-    """Build s3://bucket/key for run. subfolder is data, sample, or reports."""
+    """Build s3://bucket/key for run. subfolder is data, sample, reports, or raw."""
     base = build_run_base(run_type, run_name)
     key = "/".join([base, subfolder] + list(path_parts))
     return f"{S3_PREFIX}{bucket}/{key}"
