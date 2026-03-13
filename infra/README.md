@@ -97,7 +97,7 @@ aws lambda invoke --function-name fide-glicko-player-list \
 
 - **Timeout:** 5 min (downloads ~45MB from FIDE)
 - **Memory:** 1024 MB
-- **Outputs:** players_list.parquet, players_list_sample.json, players_list.xml, players_list_report.json
+- **Outputs:** players_list.parquet, raw/players_list.xml.gz, players_list_sample.json, players_list_report.json
 - **Deploy note:** Package (~70MB) exceeds Lambda's 50MB direct upload limit; deploy script uploads to S3 first (`s3://fide-glicko/lambda-packages/`).
 
 ---
@@ -138,4 +138,14 @@ s3://fide-glicko/
 
 ## Logs
 
-Lambda logs (stdout/stderr) go to **CloudWatch Logs** under `/aws/lambda/<function-name>`. No extra configuration needed. Use INFO level for verbose output during runs.
+Lambda logs (stdout/stderr) go to **CloudWatch Logs** under `/aws/lambda/<function-name>`. All handlers call `lambda_logging.configure()` to ensure output flushes promptly (important when Lambda times out).
+
+**CloudWatch Logs cost** (typical for this project):
+
+| Item | Price | Rough usage |
+|------|-------|-------------|
+| Ingestion | $0.50/GB | ~1–50 KB per invocation → **~\$0.0025/month** for 100 runs |
+| Storage | $0.03/GB-month | Negligible at a few MB |
+| **Total** | | **~ pennies per month** |
+
+Free tier: 5 GB ingestion, 5 GB storage/month. For monthly pipeline runs and occasional dev invocations, cost is negligible.

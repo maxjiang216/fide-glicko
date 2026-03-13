@@ -74,11 +74,12 @@ All Lambdas accept **run_type**, **run_name**, **bucket**, **override** where ap
 }
 ```
 - **federations_s3_uri**: Optional. Defaults to `{base}/data/federations.csv`
-- Outputs: `{base}/data/players_list.parquet`, `{base}/data/players_list.xml`, `{base}/sample/players_list_sample.json`, `{base}/reports/players_list_report.json`
+- Outputs: `{base}/data/players_list.parquet`, `{base}/raw/players_list.xml.gz`, `{base}/sample/players_list_sample.json`, `{base}/reports/players_list_report.json`
 
 ## Path formula
 
 - **base** = `{run_type}/{run_name}` for prod/custom, or `test` for run_type=test
 - **data**: `{bucket}/{base}/data/...`
+- **raw**: `{bucket}/{base}/raw/...` (compressed downloads, e.g. players_list.xml.gz)
 - **sample**: `{bucket}/{base}/sample/...`
 - **reports**: `{bucket}/{base}/reports/...`
