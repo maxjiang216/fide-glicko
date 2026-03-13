@@ -6,7 +6,9 @@ Event shape:
     "run_type": "prod",
     "run_name": "2024-01",
     "chunk_index": 0,
-    "bucket": "fide-glicko"
+    "bucket": "fide-glicko",
+    "override": false,
+    "save_raw": false
 }
 
 - run_type: prod | custom | test (default: custom)
@@ -15,12 +17,14 @@ Event shape:
   {base}/data/tournament_id_chunks/chunk_{i}.txt and
   {base}/data/tournament_details_chunks/chunk_{i}.
 - bucket: S3 bucket (default: fide-glicko)
+- override: If true, overwrite existing output (default: false)
+- save_raw: If true, save raw HTML to raw/details/chunk_{i}/{id}.html.gz (default: false)
 """
 
 import logging
 
 from .lambda_logging import configure
-from s3_io import build_s3_uri_for_run
+from s3_io import build_s3_uri_for_run, output_exists
 from get_tournament_details import run
 
 logger = logging.getLogger(__name__)
@@ -47,6 +51,8 @@ def lambda_handler(event: dict, context) -> dict:
     run_name = event.get("run_name")
     chunk_index = event.get("chunk_index")
     bucket = event.get("bucket", "fide-glicko")
+    override = event.get("override", False)
+    save_raw = event.get("save_raw", False)
 
     if run_type not in ("prod", "custom", "test"):
         return {
@@ -88,6 +94,15 @@ def lambda_handler(event: dict, context) -> dict:
         output_path
     )
 
+    parquet_uri = output_path + ".parquet"
+    if not override and output_exists(parquet_uri):
+        return {
+            "statusCode": 409,
+            "success": False,
+            "error": "Output already exists; pass override=true to replace",
+            "output_path": parquet_uri,
+        }
+
     logger.info(
         "Starting tournament details scrape: input=%s output=%s",
         input_path,
@@ -103,6 +118,7 @@ def lambda_handler(event: dict, context) -> dict:
         quiet=False,
         output_sample_path=output_sample_path,
         output_reports_base=output_reports_base,
+        save_raw=save_raw,
     )
 
     if exit_code != 0:

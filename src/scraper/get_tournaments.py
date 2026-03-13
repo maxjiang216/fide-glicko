@@ -9,6 +9,8 @@ requests to the JSON endpoints, which is much faster than using a headless brows
 import argparse
 import asyncio
 import csv
+import gzip
+import io
 import json
 import logging
 import re
@@ -195,7 +197,7 @@ async def fetch_federation_tournaments(
     month: int,
     max_retries: int = 3,
     retry_delay: float = 1.0,
-) -> Tuple[str, str, List[Tournament], Optional[str]]:
+) -> Tuple[str, str, List[Tournament], Optional[str], Optional[str]]:
     """
     Fetch tournaments for one federation.
 
@@ -210,8 +212,8 @@ async def fetch_federation_tournaments(
         retry_delay: Delay in seconds between retries.
 
     Returns:
-        Tuple of (code, name, tournaments, error_message).
-        error_message is None on success.
+        Tuple of (code, name, tournaments, error_message, raw_text).
+        error_message is None on success. raw_text is response text on success, None on error.
     """
     period = f"{year}-{month:02d}-01"
     url = f"{TOURNAMENTS_URL}?country={code}&period={period}"
@@ -224,7 +226,7 @@ async def fetch_federation_tournaments(
 
     for attempt in range(max_retries):
         if _shutdown_requested:
-            return (code, name, [], "Shutdown requested")
+            return (code, name, [], "Shutdown requested", None)
 
         async with semaphore:
             try:
@@ -236,7 +238,7 @@ async def fetch_federation_tournaments(
                         if attempt < max_retries - 1:
                             await asyncio.sleep(retry_delay * (2**attempt))
                             continue
-                        return (code, name, [], error_msg)
+                        return (code, name, [], error_msg, None)
 
                     # Read response as text first, then parse as JSON
                     # This gives us more control and matches curl's behavior
@@ -248,7 +250,7 @@ async def fetch_federation_tournaments(
                         if attempt < max_retries - 1:
                             await asyncio.sleep(retry_delay * (2**attempt))
                             continue
-                        return (code, name, [], error_msg)
+                        return (code, name, [], error_msg, None)
 
                     # Try to parse as JSON
                     try:
@@ -258,11 +260,11 @@ async def fetch_federation_tournaments(
                         if attempt < max_retries - 1:
                             await asyncio.sleep(retry_delay * (2**attempt))
                             continue
-                        return (code, name, [], error_msg)
+                        return (code, name, [], error_msg, None)
 
                     if "data" not in data:
                         # No tournaments - not an error, might be legitimate
-                        return (code, name, [], None)
+                        return (code, name, [], None, text)
 
                     tournaments = []
                     for row in data["data"]:
@@ -270,28 +272,28 @@ async def fetch_federation_tournaments(
                         if tournament:
                             tournaments.append(tournament)
 
-                    return (code, name, tournaments, None)
+                    return (code, name, tournaments, None, text)
 
             except asyncio.TimeoutError:
                 error_msg = "Timeout"
                 if attempt < max_retries - 1:
                     await asyncio.sleep(retry_delay * (2**attempt))
                     continue
-                return (code, name, [], error_msg)
+                return (code, name, [], error_msg, None)
             except json.JSONDecodeError as e:
                 error_msg = f"JSON decode error: {e}"
                 if attempt < max_retries - 1:
                     await asyncio.sleep(retry_delay * (2**attempt))
                     continue
-                return (code, name, [], error_msg)
+                return (code, name, [], error_msg, None)
             except Exception as e:
                 error_msg = str(e)
                 if attempt < max_retries - 1:
                     await asyncio.sleep(retry_delay * (2**attempt))
                     continue
-                return (code, name, [], error_msg)
+                return (code, name, [], error_msg, None)
 
-    return (code, name, [], "Max retries exceeded")
+    return (code, name, [], "Max retries exceeded", None)
 
 
 async def fetch_available_periods(
@@ -446,6 +448,25 @@ def graceful_shutdown(signum: int, frame) -> None:
     sys.exit(0)
 
 
+def _compress_gzip(data: bytes, level: int = 9) -> bytes:
+    """Compress with gzip level 9. Same as players raw."""
+    buf = io.BytesIO()
+    with gzip.GzipFile(fileobj=buf, mode="wb", compresslevel=level) as z:
+        z.write(data)
+    return buf.getvalue()
+
+
+def _raw_base_from_ids_uri(ids_uri: str) -> Optional[str]:
+    """Derive raw/tournaments base from ids_uri. Returns None if not derivable."""
+    suffix = "/data/tournament_ids.txt"
+    if ids_uri.endswith(suffix):
+        base = ids_uri[
+            : -len(suffix)
+        ]  # run base e.g. data/test or s3://bucket/prod/2024-01
+        return f"{base}/raw/tournaments"
+    return None
+
+
 def _json_uri_from_ids_uri(ids_uri: str) -> str:
     """Derive JSON sample URI from IDs URI."""
     if ids_uri.endswith(".json"):
@@ -473,6 +494,7 @@ async def scrape_month(
     max_retries: int = 3,
     retry_delay: float = 1.0,
     limit: int = 0,
+    save_raw: bool = True,
 ) -> List[Tournament]:
     """
     Scrape all federations for a given month.
@@ -486,6 +508,8 @@ async def scrape_month(
         max_concurrency: Maximum number of concurrent requests.
         max_retries: Maximum number of retries per federation.
         retry_delay: Base delay in seconds between retries.
+        save_raw: If True and output uses data/tournament_ids.txt structure, save raw
+            JSON per federation to raw/tournaments/{code}.json.gz (gzip-9).
 
     Returns:
         List of unique Tournament objects.
@@ -524,6 +548,10 @@ async def scrape_month(
 
     semaphore = asyncio.Semaphore(max_concurrency)
 
+    raw_base_uri: Optional[str] = (
+        _raw_base_from_ids_uri(str(output_path)) if save_raw else None
+    )
+
     # Collect results
     all_tournaments: List[Tournament] = []
     errors = []
@@ -549,8 +577,13 @@ async def scrape_month(
                         task.cancel()
                 break
 
-            code, name, tournaments, error = await coro
+            code, name, tournaments, error, raw_text = await coro
             processed_count += 1
+
+            if raw_base_uri and not error and raw_text:
+                raw_uri = f"{raw_base_uri}/{code}.json.gz"
+                compressed = _compress_gzip(raw_text.encode("utf-8"))
+                write_output(compressed, raw_uri)
 
             # Update shutdown state
             _shutdown_state["all_tournaments"] = all_tournaments
@@ -838,6 +871,11 @@ def main() -> int:
         default=0,
         help="Process only first N unique tournaments (for testing; 0 = no limit)",
     )
+    parser.add_argument(
+        "--no-save-raw",
+        action="store_true",
+        help="Skip saving raw JSON responses to raw/tournaments/",
+    )
 
     args = parser.parse_args()
 
@@ -895,6 +933,7 @@ def main() -> int:
                 max_retries=args.max_retries,
                 retry_delay=args.retry_delay,
                 limit=args.limit,
+                save_raw=not args.no_save_raw,
             )
         )
         return 0

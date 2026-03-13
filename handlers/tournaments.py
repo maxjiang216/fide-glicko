@@ -19,7 +19,8 @@ Event shape:
 - override: If true, overwrite existing output
 - federations_s3_uri: Optional. Defaults to {base}/data/federations.csv
 
-Outputs: {base}/data/tournament_ids.txt, {base}/sample/tournament_ids_sample.json
+Outputs: {base}/data/tournament_ids.txt, {base}/sample/tournament_ids_sample.json,
+{base}/raw/tournaments/{fed}.json.gz (raw API JSON, gzip-9)
 """
 
 import logging

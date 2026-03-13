@@ -7,6 +7,7 @@ Supports rate limiting, retries, checkpoints, and progress tracking.
 """
 
 import argparse
+import gzip
 import io
 import json
 import logging
@@ -66,6 +67,23 @@ def _is_s3(path: str) -> bool:
         return is_s3_path(path)
     except ImportError:
         return path.strip().lower().startswith("s3://")
+
+
+def _compress_gzip(data: bytes, level: int = 9) -> bytes:
+    """Compress with gzip level 9. Same as players/tournaments raw."""
+    buf = io.BytesIO()
+    with gzip.GzipFile(fileobj=buf, mode="wb", compresslevel=level) as z:
+        z.write(data)
+    return buf.getvalue()
+
+
+def _raw_base_from_output_path(output_path: str) -> Optional[str]:
+    """Derive raw/details base from output_path. Returns None if not derivable."""
+    if "/data/tournament_details_chunks/" in output_path:
+        return output_path.replace(
+            "/data/tournament_details_chunks/", "/raw/details/"
+        ).rstrip("/")
+    return None
 
 
 def _write_to_path(path: str, content: bytes | str) -> None:
@@ -221,13 +239,14 @@ def fetch_tournament_details(
     session: requests.Session,
     *,
     _attempt_log: Optional[List[Dict]] = None,
-) -> Tuple[Optional[Dict], Optional[str], int]:
+    return_raw: bool = False,
+) -> Tuple[Optional[Dict], Optional[str], int, Optional[bytes]]:
     """
     Fetch tournament details from FIDE website.
 
     Returns:
-        Tuple of (details_dict, error_string). If successful, details_dict is not None.
-        If error, error_string contains the error message.
+        Tuple of (details_dict, error_string, num_attempts, raw_content).
+        If successful, details_dict is not None. raw_content is response bytes when return_raw=True.
     """
     url = f"https://ratings.fide.com/tournament_information.phtml?event={tournament_id}"
 
@@ -270,11 +289,12 @@ def fetch_tournament_details(
                     )
                 continue
 
+            raw_content = response.content if return_raw else None
             soup = BeautifulSoup(response.content, "html.parser")
 
             details_table = soup.find("table", class_="details_table")
             if not details_table:
-                return None, "no data found", len(attempt_times)
+                return None, "no data found", len(attempt_times), None
 
             details = {}
 
@@ -313,7 +333,12 @@ def fetch_tournament_details(
                     details[field_map[label]] = value
 
             # Remove empty fields
-            return {k: v for k, v in details.items() if v}, None, len(attempt_times)
+            return (
+                {k: v for k, v in details.items() if v},
+                None,
+                len(attempt_times),
+                raw_content,
+            )
 
         except requests.exceptions.Timeout as e:
             last_error = f"timeout: {e}"
@@ -353,7 +378,7 @@ def fetch_tournament_details(
                     )
                 continue
             last_error = f"connection error: {e}"
-            return None, last_error, len(attempt_times)
+            return None, last_error, len(attempt_times), None
         except requests.exceptions.RequestException as e:
             error_str = str(e).lower()
             # Check for various connection error patterns that should be retried
@@ -380,7 +405,7 @@ def fetch_tournament_details(
                     )
                 continue
             last_error = f"network error: {e}"
-            return None, last_error, len(attempt_times)
+            return None, last_error, len(attempt_times), None
         except Exception as e:
             last_error = f"parse error: {e}"
             if _attempt_log is not None:
@@ -394,7 +419,7 @@ def fetch_tournament_details(
                 )
             continue
 
-    return None, f"max retries exceeded: {last_error}", len(attempt_times)
+    return None, f"max retries exceeded: {last_error}", len(attempt_times), None
 
 
 def flatten_result(result: Dict) -> Dict:
@@ -740,6 +765,7 @@ def run(
     limit: int = 0,
     output_sample_path: str | None = None,
     output_reports_base: str | None = None,
+    save_raw: bool = False,
 ) -> int:
     """
     Scrape tournament details for IDs from input_path, write to output_path.
@@ -756,6 +782,7 @@ def run(
         output_reports_base: Optional base for report, failures, time_control files.
             Default: output_path base. Used for _report.json, _failures.json,
             _time_control_unique_values.txt.
+        save_raw: If True, save raw HTML per tournament to raw/details/{chunk}/{id}.html.gz.
 
     Returns:
         0 on success, 1 on failure.
@@ -803,6 +830,10 @@ def run(
     session.mount("https://", adapter)
     rate_limiter = RateLimiter(rate_limit)
 
+    raw_base: Optional[str] = (
+        _raw_base_from_output_path(output_path) if save_raw else None
+    )
+
     all_results: List[Dict] = []
     success_count = 0
     error_count = 0
@@ -837,7 +868,9 @@ def run(
         pass_failed = []
         for tournament_id in current_tournaments:
             rate_limiter.wait()
-            details, error, _ = fetch_tournament_details(tournament_id, session)
+            details, error, _, raw_content = fetch_tournament_details(
+                tournament_id, session, return_raw=save_raw
+            )
 
             result = {"tournament_id": tournament_id}
             if details is None:
@@ -864,6 +897,9 @@ def run(
                 success_count += 1
                 result["success"] = True
                 result["details"] = details
+                if raw_base and raw_content:
+                    raw_path = f"{raw_base}/{tournament_id}.html.gz"
+                    _write_to_path(raw_path, _compress_gzip(raw_content))
                 if checkpoint > 0 and success_count % checkpoint == 0:
                     save_checkpoint(parquet_path, all_results, base + ".checkpoint")
 
@@ -1184,7 +1220,7 @@ def main():
         for tournament_id in current_tournaments:
             rate_limiter.wait()
 
-            details, error, num_attempts = fetch_tournament_details(
+            details, error, num_attempts, _ = fetch_tournament_details(
                 tournament_id,
                 session,
                 _attempt_log=attempt_log if args.verbose_errors else None,
