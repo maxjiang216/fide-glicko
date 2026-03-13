@@ -28,6 +28,7 @@ cd "$BUILD_DIR"
 # Copy handler and scraper code
 cp -r "$REPO_ROOT/handlers" .
 cp "$REPO_ROOT/src/scraper/get_tournaments.py" .
+cp "$REPO_ROOT/src/scraper/raw_utils.py" .
 cp "$REPO_ROOT/src/scraper/s3_io.py" .
 
 # Install aiohttp for Lambda Python 3.12 (boto3 in runtime)
@@ -41,6 +42,20 @@ fi
 zip -r "$ZIP_PATH" . -x "*.pyc" -x "__pycache__/*" -x "*__pycache__*"
 
 echo "Built $ZIP_PATH ($(du -h "$ZIP_PATH" | cut -f1))"
+
+# Validate handler imports (catches missing deps like raw_utils)
+python3 -c "
+import zipfile, tempfile, sys
+from pathlib import Path
+zip_path = '$ZIP_PATH'
+with tempfile.TemporaryDirectory() as d:
+    with zipfile.ZipFile(zip_path, 'r') as z:
+        z.extractall(d)
+    sys.path.insert(0, d)
+    mod = __import__('handlers.tournaments', fromlist=['lambda_handler'])
+    assert hasattr(mod, 'lambda_handler')
+print('Import check passed.')
+"
 
 if [[ "${1:-}" == "--zip-only" ]]; then
   echo "Zip only. Skipping deploy."

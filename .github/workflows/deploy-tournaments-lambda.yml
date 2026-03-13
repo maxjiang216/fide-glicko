@@ -9,6 +9,7 @@ on:
     branches: [main, master]
     paths:
       - "src/scraper/get_tournaments.py"
+      - "src/scraper/raw_utils.py"
       - "src/scraper/s3_io.py"
       - "handlers/tournaments.py"
       - "infra/deploy_tournaments_lambda.sh"
@@ -16,6 +17,7 @@ on:
   pull_request:
     paths:
       - "src/scraper/get_tournaments.py"
+      - "src/scraper/raw_utils.py"
       - "src/scraper/s3_io.py"
       - "handlers/tournaments.py"
       - "infra/deploy_tournaments_lambda.sh"
