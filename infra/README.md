@@ -149,3 +149,14 @@ Lambda logs (stdout/stderr) go to **CloudWatch Logs** under `/aws/lambda/<functi
 | **Total** | | **~ pennies per month** |
 
 Free tier: 5 GB ingestion, 5 GB storage/month. For monthly pipeline runs and occasional dev invocations, cost is negligible.
+
+### Raw storage cost (when save_raw enabled)
+
+| Source | Size per run (gzip) | Est. monthly (S3 Standard) |
+|--------|---------------------|----------------------------|
+| players_list.xml | ~42 MB | ~$0.001 |
+| tournaments (208 federations) | ~124 KB | negligible |
+| details (75 chunks × 225) | ~150 MB | ~$0.003 |
+| **Total raw** | ~192 MB | **~$0.004** |
+
+Glacier Instant Retrieval would reduce storage by ~6× (~$0.0007/month).

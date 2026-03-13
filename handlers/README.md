@@ -32,7 +32,7 @@ All Lambdas accept **run_type**, **run_name**, **bucket**, **override** where ap
 - **year**, **month**: Required
 - **run_type**, **run_name**: As above
 - **federations_s3_uri**: Optional. Defaults to `{base}/data/federations.csv`
-- Outputs: `{base}/data/tournament_ids.txt`, `{base}/sample/tournament_ids_sample.json`
+- Outputs: `{base}/data/tournament_ids.txt`, `{base}/sample/tournament_ids_sample.json`, `{base}/raw/tournaments/{fed}.json.gz` (raw API JSON, gzip-9)
 
 ### split_ids
 ```json
@@ -58,10 +58,13 @@ All Lambdas accept **run_type**, **run_name**, **bucket**, **override** where ap
   "run_type": "prod",
   "run_name": "2024-01",
   "chunk_index": 0,
-  "bucket": "fide-glicko"
+  "bucket": "fide-glicko",
+  "override": false
 }
 ```
 - **chunk_index**: Required (0-based). Paths inferred: `{base}/data/tournament_id_chunks/chunk_{i}.txt` → `{base}/data/tournament_details_chunks/chunk_{i}`
+- **override**: If true, overwrite existing output (default: false)
+- **save_raw**: If true, save raw HTML to `{base}/raw/details/chunk_{i}/{id}.html.gz` (default: false, ~2 MB gzipped per chunk)
 - Orchestrator: use `chunk_index` from each split_ids chunk, pass run_type/run_name from state
 
 ### player_list

@@ -86,7 +86,7 @@ class TestGetTournaments:
         async def _fetch():
             semaphore = asyncio.Semaphore(1)
             async with aiohttp.ClientSession() as session:
-                code, name, tournaments, error = await fetch_federation_tournaments(
+                code, name, tournaments, error, _ = await fetch_federation_tournaments(
                     session, semaphore, "USA", "United States of America", 2025, 12
                 )
                 return tournaments, error
@@ -108,7 +108,7 @@ class TestGetTournaments:
         async def _fetch():
             semaphore = asyncio.Semaphore(1)
             async with aiohttp.ClientSession() as session:
-                code, name, tournaments, error = await fetch_federation_tournaments(
+                code, name, tournaments, error, _ = await fetch_federation_tournaments(
                     session, semaphore, "USA", "United States of America", 2025, 12
                 )
                 return tournaments, error
