@@ -97,8 +97,6 @@ def run(
     chunk_size: int = 225,
     bucket: str = "fide-glicko",
     output_prefix: str = "data",
-    year: Optional[int] = None,
-    month: Optional[int] = None,
     chunk_prefix: str = "chunk",
     output_part_prefix: str = "part",
     override: bool = False,
@@ -112,16 +110,14 @@ def run(
         chunk_count: Number of chunks (optional). If not set, derived from chunk_size.
         chunk_size: Max tournaments per chunk when chunk_count not set (default: 225).
         bucket: S3 bucket (for building chunk/output paths if using S3).
-        output_prefix: S3 prefix (e.g. "data" or "runs/dev-123").
-        year: Year for path building (optional; extracted from ids_path if missing).
-        month: Month for path building (optional).
-        chunk_prefix: Prefix for chunk input files (e.g. "chunk" -> YYYY_MM_chunk_0).
-        output_part_prefix: Prefix for details output paths (e.g. "part" -> YYYY_MM_part_0).
+        output_prefix: S3 prefix when ids_path does not match standard structure.
+        chunk_prefix: Prefix for chunk input files (unused with standard structure).
+        output_part_prefix: Prefix for details output paths (unused with standard structure).
         override: If True, overwrite existing chunk files.
         quiet: Reduce log output.
 
     Returns:
-        List of dicts {"input_path": str, "output_path": str} for each chunk.
+        List of dicts {"input_path": str, "output_path": str, "tournament_count": int, "chunk_index": int}.
     """
     if quiet:
         logging.getLogger().setLevel(logging.WARNING)
@@ -239,16 +235,6 @@ def main() -> int:
         help="S3 prefix for output (default: data)",
     )
     parser.add_argument(
-        "--year",
-        type=int,
-        help="Year for path building (optional; inferred from ids path)",
-    )
-    parser.add_argument(
-        "--month",
-        type=int,
-        help="Month for path building (optional)",
-    )
-    parser.add_argument(
         "--override",
         action="store_true",
         help="Overwrite existing chunk files",
@@ -272,8 +258,6 @@ def main() -> int:
         chunk_size=args.chunk_size,
         bucket=args.bucket,
         output_prefix=args.output_prefix,
-        year=args.year,
-        month=args.month,
         override=args.override,
         quiet=args.quiet,
     )

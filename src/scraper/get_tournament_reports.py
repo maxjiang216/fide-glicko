@@ -606,20 +606,8 @@ def fetch_tournament_report(
                                             opp_fed_text
                                         )
 
-                                    has_result = forfeit or (score is not None)
                                     has_opponent = bool(opp_id)
-
-                                    if not has_opponent and has_result:
-                                        logger.warning(
-                                            "Result without opponent: tournament_id=%s player_id=%s round=%s "
-                                            "(forfeit=%s score=%s) - not adding game",
-                                            tournament_code,
-                                            player_id,
-                                            round_num,
-                                            forfeit or "",
-                                            score,
-                                        )
-                                    elif has_opponent:
+                                    if has_opponent:
                                         # Add round only when we have an opponent (can form a game)
                                         round_data = {
                                             "round": round_num,

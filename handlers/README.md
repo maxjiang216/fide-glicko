@@ -37,8 +37,6 @@ All Lambdas accept **run_type**, **run_name**, **bucket**, **override** where ap
 ### split_ids
 ```json
 {
-  "year": 2024,
-  "month": 1,
   "run_type": "custom",
   "run_name": "2024-01",
   "bucket": "fide-glicko",
@@ -46,7 +44,8 @@ All Lambdas accept **run_type**, **run_name**, **bucket**, **override** where ap
   "override": false
 }
 ```
-- **year**, **month**: Required (for run_metadata)
+- **run_type**, **run_name**: Used to locate `{base}/data/tournament_ids.txt`. No year/month
+  required — paths derive from run folder.
 - **ids_uri**: Optional. Defaults to `{base}/data/tournament_ids.txt`
 - **chunk_size**: default 225
 - **chunk_count**: Optional override
@@ -64,7 +63,25 @@ All Lambdas accept **run_type**, **run_name**, **bucket**, **override** where ap
 ```
 - **chunk_index**: Required (0-based). Paths inferred: `{base}/data/tournament_id_chunks/chunk_{i}.txt` → `{base}/data/tournament_details_chunks/chunk_{i}`
 - **override**: If true, overwrite existing output (default: false)
-- **save_raw**: If true, save raw HTML to `{base}/raw/details/chunk_{i}/{id}.html.gz` (default: false, ~2 MB gzipped per chunk)
+- **save_raw**: If true, save concatenated raw HTML to `{base}/raw/details/chunk_{i}.html.gz` (default: false, ~2 MB gzipped per chunk)
+- Orchestrator: use `chunk_index` from each split_ids chunk, pass run_type/run_name from state
+
+### reports_chunk
+```json
+{
+  "run_type": "prod",
+  "run_name": "2024-01",
+  "chunk_index": 0,
+  "bucket": "fide-glicko",
+  "override": false,
+  "save_raw": false
+}
+```
+- **chunk_index**: Required (0-based). Paths inferred: `{base}/data/tournament_id_chunks/chunk_{i}.txt` → `{base}/data/tournament_reports_chunks/chunk_{i}`
+- **override**: If true, overwrite existing output (default: false)
+- **save_raw**: If true, save concatenated raw HTML to `{base}/raw/reports/chunk_{i}.html.gz` (default: false, ~3.4 MB gzipped per chunk)
+- **details_path**: Optional. Defaults to `{base}/data/tournament_details_chunks/chunk_{i}.parquet` for date inference
+- Outputs: `{base}/data/tournament_reports_chunks/chunk_{i}_players.parquet`, `chunk_{i}_games.parquet`
 - Orchestrator: use `chunk_index` from each split_ids chunk, pass run_type/run_name from state
 
 ### player_list

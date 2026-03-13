@@ -39,8 +39,6 @@ def main() -> int:
         chunk_size=args.chunk_size,
         bucket="fide-glicko",
         output_prefix="data",
-        year=2024,
-        month=1,
         override=False,
         quiet=True,
     )

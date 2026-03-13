@@ -3,19 +3,17 @@ Lambda handler for splitting tournament IDs into chunks.
 
 Event shape:
 {
-    "year": 2024,
-    "month": 1,
     "run_type": "custom",
     "run_name": "2024-01",
     "bucket": "fide-glicko",
-    "ids_uri": "s3://fide-glicko/prod/2024-01/data/tournament_ids.txt",
+    "ids_uri": null,
     "chunk_size": 225,
     "override": false
 }
 
-- year, month: Required (for run_metadata).
 - run_type: prod, custom, or test (default: custom).
-- run_name: Required for prod/custom. Ignored for test.
+- run_name: Required for prod/custom. Ignored for test. Used to locate
+  {base}/data/tournament_ids.txt.
 - bucket: S3 bucket (default: fide-glicko).
 - ids_uri: Path to tournament IDs file. If not set, uses {base}/data/tournament_ids.txt.
   Must exist; Step Function runs tournaments Lambda first.
@@ -42,8 +40,6 @@ logger = logging.getLogger(__name__)
 def lambda_handler(event: dict, context) -> dict:
     """Lambda entry point for splitting tournament IDs into chunks."""
     configure()
-    year = event.get("year")
-    month = event.get("month")
     run_type = event.get("run_type", "custom")
     run_name = event.get("run_name")
     bucket = event.get("bucket", "fide-glicko")
@@ -52,13 +48,6 @@ def lambda_handler(event: dict, context) -> dict:
     chunk_size = event.get("chunk_size", 225)
     override = event.get("override", False)
 
-    if year is None or month is None:
-        logger.error("year and month are required")
-        return {
-            "statusCode": 400,
-            "success": False,
-            "error": "year and month are required",
-        }
     if run_type not in ("prod", "custom", "test"):
         return {
             "statusCode": 400,
@@ -114,8 +103,6 @@ def lambda_handler(event: dict, context) -> dict:
         base_uri,
         {
             "step": "split_ids",
-            "year": int(year),
-            "month": int(month),
             "chunk_count": len(chunks),
             "run_type": run_type,
             "run_name": run_name or "",
@@ -135,8 +122,6 @@ def lambda_handler(event: dict, context) -> dict:
     return {
         "statusCode": 200,
         "success": True,
-        "year": year,
-        "month": month,
         "chunk_count": len(chunks),
         "chunks": chunks,
     }
