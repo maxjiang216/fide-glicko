@@ -8,6 +8,7 @@ on:
   push:
     branches: [main, master]
     paths:
+      - ".github/workflows/deploy-reports-chunk-lambda.yml"
       - "src/scraper/get_tournament_reports.py"
       - "src/scraper/raw_utils.py"
       - "src/scraper/s3_io.py"
