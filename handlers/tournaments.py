@@ -5,27 +5,31 @@ Event shape:
 {
     "year": 2025,
     "month": 3,
+    "run_type": "custom",
+    "run_name": "2024-01",
     "bucket": "fide-glicko",
-    "output_prefix": "data",
     "override": false,
-    "federations_s3_uri": "s3://fide-glicko/data/federations.csv"
+    "federations_s3_uri": "s3://fide-glicko/prod/2024-01/data/federations.csv"
 }
 
-- year: Year to scrape (required)
-- month: Month to scrape 1-12 (required)
-- bucket: S3 bucket name (default: fide-glicko)
-- output_prefix: Path prefix under bucket, e.g. "data" or "runs/dev-20250308-abc"
+- year, month: Required
+- run_type: prod, custom, or test (default: custom)
+- run_name: Required for prod/custom. Ignored for test.
+- bucket: S3 bucket (default: fide-glicko)
 - override: If true, overwrite existing output
-- federations_s3_uri: Optional S3 URI for federations.csv. Defaults to s3://{bucket}/data/federations.csv
+- federations_s3_uri: Optional. Defaults to {base}/data/federations.csv
 
-Outputs: s3://{bucket}/{output_prefix}/tournament_ids/YYYY_MM, tournament_ids_json/YYYY_MM.json
-
-Logs go to CloudWatch Logs (/aws/lambda/<function-name>).
+Outputs: {base}/data/tournament_ids.txt, {base}/sample/tournament_ids_sample.json
 """
 
 import logging
 
-from s3_io import build_s3_uri
+from s3_io import (
+    build_run_base,
+    build_s3_uri_for_run,
+    output_exists,
+    write_run_metadata,
+)
 from get_tournaments import run
 
 logger = logging.getLogger(__name__)
@@ -35,8 +39,9 @@ def lambda_handler(event: dict, context) -> dict:
     """Lambda entry point for tournaments scraper."""
     year = event.get("year")
     month = event.get("month")
+    run_type = event.get("run_type", "custom")
+    run_name = event.get("run_name")
     bucket = event.get("bucket", "fide-glicko")
-    output_prefix = event.get("output_prefix", "data")
     override = event.get("override", False)
     federations_s3_uri = event.get("federations_s3_uri")
 
@@ -47,28 +52,72 @@ def lambda_handler(event: dict, context) -> dict:
             "success": False,
             "error": "year and month are required",
         }
+    if run_type not in ("prod", "custom", "test"):
+        return {
+            "statusCode": 400,
+            "success": False,
+            "error": f"run_type must be one of prod, custom, test (got {run_type!r})",
+        }
+    if run_type in ("prod", "custom") and not run_name:
+        return {
+            "statusCode": 400,
+            "success": False,
+            "error": "run_name required when run_type is prod or custom",
+        }
 
-    ids_uri = build_s3_uri(
-        bucket, f"{output_prefix}/tournament_ids", f"{year}_{month:02d}"
+    ids_uri = build_s3_uri_for_run(
+        bucket, run_type, run_name, "data", "tournament_ids.txt"
     )
+    json_uri = build_s3_uri_for_run(
+        bucket, run_type, run_name, "sample", "tournament_ids_sample.json"
+    )
+
+    if not override and output_exists(ids_uri):
+        return {
+            "statusCode": 409,
+            "success": False,
+            "error": "Output already exists; pass override=true to replace",
+            "output_path": ids_uri,
+        }
+
+    if federations_s3_uri is None:
+        federations_s3_uri = build_s3_uri_for_run(
+            bucket, run_type, run_name, "data", "federations.csv"
+        )
+
     logger.info(
-        "Starting tournaments scrape: year=%s month=%s bucket=%s prefix=%s override=%s -> %s",
+        "Starting tournaments scrape: year=%s month=%s bucket=%s run_type=%s run_name=%s override=%s -> %s",
         year,
         month,
         bucket,
-        output_prefix,
+        run_type,
+        run_name,
         override,
         ids_uri,
+    )
+
+    base_key = build_run_base(run_type, run_name)
+    base_uri = f"s3://{bucket}/{base_key}"
+    write_run_metadata(
+        base_uri,
+        {
+            "step": "tournaments",
+            "year": int(year),
+            "month": int(month),
+            "run_type": run_type,
+            "run_name": run_name or "",
+        },
+        merge=True,
     )
 
     exit_code = run(
         year=int(year),
         month=int(month),
-        bucket=bucket,
-        output_prefix=output_prefix,
         federations_s3_uri=federations_s3_uri,
         override=override,
         quiet=False,
+        ids_uri=ids_uri,
+        json_uri=json_uri,
     )
 
     if exit_code != 0:

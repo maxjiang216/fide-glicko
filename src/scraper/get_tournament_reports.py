@@ -1296,6 +1296,25 @@ def main():
         default="data",
         help="Base data directory (default: data)",
     )
+    parser.add_argument(
+        "--local-root",
+        type=str,
+        default="data",
+        help="Local bucket root for run structure",
+    )
+    parser.add_argument(
+        "--run-type",
+        type=str,
+        choices=("prod", "custom", "test"),
+        default=None,
+        help="Run type; with --run-name uses run path structure",
+    )
+    parser.add_argument(
+        "--run-name",
+        type=str,
+        default=None,
+        help="Run name (e.g. 2024-01)",
+    )
     parser.add_argument("--output", type=str, default="", help="Output file path")
     parser.add_argument(
         "--max-retries", type=int, default=3, help="Max retry passes (default: 3)"
@@ -1347,6 +1366,11 @@ def main():
         action="store_true",
         help="Skip pairing and player-file validation (faster when not needed).",
     )
+    parser.add_argument(
+        "--override",
+        action="store_true",
+        help="Overwrite existing output if it exists",
+    )
 
     args = parser.parse_args()
 
@@ -1385,19 +1409,45 @@ def main():
         if args.month < 1 or args.month > 12:
             logger.error("Error: month must be 1-12")
             sys.exit(1)
-        # Primary source: tournament IDs from get_tournaments.py
-        ids_path = os.path.join(
-            args.data_dir, "tournament_ids", f"{args.year}_{args.month:02d}"
-        )
-        details_path = (
-            args.details_path
-            if args.details_path
-            else os.path.join(
-                args.data_dir,
-                "tournament_details",
-                f"{args.year}_{args.month:02d}.parquet",
+        run_name = args.run_name or f"{args.year}-{args.month:02d}"
+        if args.run_type:
+            from s3_io import build_local_path_for_run
+
+            ids_path = str(
+                build_local_path_for_run(
+                    args.local_root,
+                    args.run_type,
+                    run_name,
+                    "data",
+                    "tournament_ids.txt",
+                )
             )
-        )
+            details_path = (
+                args.details_path
+                if args.details_path
+                else str(
+                    build_local_path_for_run(
+                        args.local_root,
+                        args.run_type,
+                        run_name,
+                        "data",
+                        "tournament_details.parquet",
+                    )
+                )
+            )
+        else:
+            ids_path = os.path.join(
+                args.data_dir, "tournament_ids", f"{args.year}_{args.month:02d}"
+            )
+            details_path = (
+                args.details_path
+                if args.details_path
+                else os.path.join(
+                    args.data_dir,
+                    "tournament_details",
+                    f"{args.year}_{args.month:02d}.parquet",
+                )
+            )
         if not os.path.exists(ids_path):
             logger.error(f"Error: tournament IDs file not found: {ids_path}")
             logger.error("Run get_tournaments.py first for --year/--month")
@@ -1453,22 +1503,65 @@ def main():
         json_path = base + "_sample.json"
         csv_path = base + "_sample.csv"
     elif args.year > 0 and args.month > 0:
-        base_path = os.path.join(
-            args.data_dir, "tournament_reports", f"{args.year}_{args.month:02d}"
-        )
-        players_path = base_path + "_players.parquet"
-        games_path = base_path + "_games.parquet"
-        json_path = base_path + "_sample.json"
-        csv_path = base_path + "_sample.csv"
+        if args.run_type:
+            from s3_io import build_local_path_for_run
+
+            run_name = args.run_name or f"{args.year}-{args.month:02d}"
+            data_base = str(
+                build_local_path_for_run(
+                    args.local_root,
+                    args.run_type,
+                    run_name,
+                    "data",
+                    "tournament_reports",
+                )
+            )
+            sample_base = str(
+                build_local_path_for_run(
+                    args.local_root,
+                    args.run_type,
+                    run_name,
+                    "sample",
+                    "tournament_reports",
+                )
+            )
+            players_path = data_base + "_players.parquet"
+            games_path = data_base + "_games.parquet"
+            json_path = sample_base + "_verbose_sample.json"
+            csv_path = sample_base + "_games_sample.csv"
+        else:
+            base_path = os.path.join(
+                args.data_dir, "tournament_reports", f"{args.year}_{args.month:02d}"
+            )
+            players_path = base_path + "_players.parquet"
+            games_path = base_path + "_games.parquet"
+            json_path = base_path + "_sample.json"
+            csv_path = base_path + "_sample.csv"
+
+    if games_path and not args.override and os.path.exists(games_path):
+        logger.info("Output %s already exists. Use --override to replace.", games_path)
+        sys.exit(0)
 
     # Load players file for validation (name/country, pairing checks)
     players_df: Optional[pd.DataFrame] = None
     if not args.no_validation:
-        players_file_path = (
-            args.players_file
-            if args.players_file
-            else str(repo_root / "src" / "data" / "players_list.parquet")
-        )
+        if args.players_file:
+            players_file_path = args.players_file
+        elif args.run_type and args.year > 0 and args.month > 0:
+            from s3_io import build_local_path_for_run
+
+            run_name = args.run_name or f"{args.year}-{args.month:02d}"
+            players_file_path = str(
+                build_local_path_for_run(
+                    args.local_root,
+                    args.run_type,
+                    run_name,
+                    "data",
+                    "players_list.parquet",
+                )
+            )
+        else:
+            players_file_path = str(repo_root / "src" / "data" / "players_list.parquet")
         if os.path.exists(players_file_path):
             try:
                 players_df = pd.read_parquet(players_file_path)

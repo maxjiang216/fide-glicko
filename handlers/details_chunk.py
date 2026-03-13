@@ -3,35 +3,88 @@ Lambda handler for tournament details chunk scraper.
 
 Event shape:
 {
-    "input_path": "s3://bucket/path/to/tournament_ids.txt",
-    "output_path": "s3://bucket/path/to/tournament_details/2025_03_part_0"
+    "run_type": "prod",
+    "run_name": "2024-01",
+    "chunk_index": 0,
+    "bucket": "fide-glicko"
 }
 
-- input_path: Path to tournament IDs file (one ID per line). S3 URI or local.
-- output_path: Base output path. Writes .parquet, _sample.json, _report.json, _failures.json.
-
-The orchestrator builds these paths; this handler just runs the scrape.
+- run_type: prod | custom | test (default: custom)
+- run_name: Required for prod/custom. Ignored for test.
+- chunk_index: Chunk index (0-based). Paths inferred as
+  {base}/data/tournament_id_chunks/chunk_{i}.txt and
+  {base}/data/tournament_details_chunks/chunk_{i}.
+- bucket: S3 bucket (default: fide-glicko)
 """
 
 import logging
 
+from s3_io import build_s3_uri_for_run
 from get_tournament_details import run
 
 logger = logging.getLogger(__name__)
 
 
+def _derive_sample_and_reports_paths(output_path: str) -> tuple[str | None, str | None]:
+    """
+    Derive output_sample_path and output_reports_base from output_path.
+    output_path should contain /data/ (e.g. .../data/tournament_details_chunks/chunk_0).
+    Returns (sample_path, reports_base) or (None, None) if /data/ not present.
+    """
+    if "/data/" not in output_path:
+        return None, None
+    sample_base = output_path.replace("/data/", "/sample/", 1)
+    reports_base = output_path.replace("/data/", "/reports/", 1)
+    output_sample_path = sample_base + "_sample.json"
+    return output_sample_path, reports_base
+
+
 def lambda_handler(event: dict, context) -> dict:
     """Lambda entry point for tournament details chunk scraper."""
-    input_path = event.get("input_path")
-    output_path = event.get("output_path")
+    run_type = event.get("run_type", "custom")
+    run_name = event.get("run_name")
+    chunk_index = event.get("chunk_index")
+    bucket = event.get("bucket", "fide-glicko")
 
-    if not input_path or not output_path:
-        logger.error("input_path and output_path are required")
+    if run_type not in ("prod", "custom", "test"):
         return {
             "statusCode": 400,
             "success": False,
-            "error": "input_path and output_path are required",
+            "error": f"run_type must be one of prod, custom, test (got {run_type!r})",
         }
+    if run_type in ("prod", "custom") and not run_name:
+        return {
+            "statusCode": 400,
+            "success": False,
+            "error": "run_name required when run_type is prod or custom",
+        }
+    if chunk_index is None:
+        return {
+            "statusCode": 400,
+            "success": False,
+            "error": "chunk_index is required",
+        }
+
+    input_path = build_s3_uri_for_run(
+        bucket,
+        run_type,
+        run_name,
+        "data",
+        "tournament_id_chunks",
+        f"chunk_{chunk_index}.txt",
+    )
+    output_path = build_s3_uri_for_run(
+        bucket,
+        run_type,
+        run_name,
+        "data",
+        "tournament_details_chunks",
+        f"chunk_{chunk_index}",
+    )
+
+    output_sample_path, output_reports_base = _derive_sample_and_reports_paths(
+        output_path
+    )
 
     logger.info(
         "Starting tournament details scrape: input=%s output=%s",
@@ -46,6 +99,8 @@ def lambda_handler(event: dict, context) -> dict:
         max_retries=3,
         checkpoint=0,
         quiet=False,
+        output_sample_path=output_sample_path,
+        output_reports_base=output_reports_base,
     )
 
     if exit_code != 0:

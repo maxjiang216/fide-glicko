@@ -598,10 +598,13 @@ def save_failures_json(results: List[Dict], base_path: str) -> None:
 def build_and_save_report(
     results: List[Dict],
     parquet_path: str,
+    report_base: str | None = None,
 ) -> None:
     """
     Build report (n_tournaments, distributions, nulls) and write time_control
     unique values to a separate file.
+    If report_base is provided, use it for report_path and time_control_path;
+    otherwise derive from parquet_path.
     """
     successful = [r for r in results if r.get("success", False)]
     if not successful:
@@ -700,9 +703,13 @@ def build_and_save_report(
     }
 
     base = (
-        parquet_path.replace(".parquet", "")
-        if parquet_path.endswith(".parquet")
-        else parquet_path
+        report_base
+        if report_base is not None
+        else (
+            parquet_path.replace(".parquet", "")
+            if parquet_path.endswith(".parquet")
+            else parquet_path
+        )
     )
     report_path = base + "_report.json"
     time_control_path = base + "_time_control_unique_values.txt"
@@ -731,19 +738,24 @@ def run(
     checkpoint: int = 0,
     quiet: bool = False,
     limit: int = 0,
+    output_sample_path: str | None = None,
+    output_reports_base: str | None = None,
 ) -> int:
     """
     Scrape tournament details for IDs from input_path, write to output_path.
 
     Args:
         input_path: Path to tournament IDs file (one ID per line). Local or S3 URI.
-        output_path: Base output path (local or S3). Writes output_path.parquet,
-            output_path_sample.json, output_path_report.json, output_path_failures.json.
+        output_path: Parquet output path (local or S3).
         rate_limit: Requests per second.
         max_retries: Retry passes for failed fetches.
         checkpoint: Save checkpoint every N successful (0 = disabled).
         quiet: Reduce log output.
         limit: Process only first N IDs (0 = all).
+        output_sample_path: Optional path for JSON sample. Default: {output_path}_sample.json.
+        output_reports_base: Optional base for report, failures, time_control files.
+            Default: output_path base. Used for _report.json, _failures.json,
+            _time_control_unique_values.txt.
 
     Returns:
         0 on success, 1 on failure.
@@ -757,7 +769,10 @@ def run(
         else output_path
     )
     parquet_path = base + ".parquet"
-    json_path = base + "_sample.json"
+    json_path = (
+        output_sample_path if output_sample_path is not None else base + "_sample.json"
+    )
+    reports_base = output_reports_base if output_reports_base is not None else base
 
     try:
         tournament_ids = _read_ids_from_path(input_path)
@@ -865,8 +880,8 @@ def run(
     save_results_parquet(all_results, parquet_path)
     save_results_json_sample(all_results, json_path, sample_size=100)
     if success_count > 0:
-        build_and_save_report(all_results, parquet_path)
-    save_failures_json(all_results, base)
+        build_and_save_report(all_results, parquet_path, report_base=reports_base)
+    save_failures_json(all_results, reports_base)
 
     elapsed = time.time() - start_time
     logger.info(
@@ -919,6 +934,25 @@ def main():
         default="data",
         help="Base data directory (default: data)",
     )
+    parser.add_argument(
+        "--local-root",
+        type=str,
+        default="data",
+        help="Local bucket root for run structure",
+    )
+    parser.add_argument(
+        "--run-type",
+        type=str,
+        choices=("prod", "custom", "test"),
+        default=None,
+        help="Run type; with --run-name uses run path structure",
+    )
+    parser.add_argument(
+        "--run-name",
+        type=str,
+        default=None,
+        help="Run name (e.g. 2024-01)",
+    )
     parser.add_argument("--output", type=str, default="", help="Output JSON file")
     parser.add_argument(
         "--rate-limit",
@@ -950,6 +984,11 @@ def main():
         help="Process only first N tournaments (for testing/profiling)",
     )
     parser.add_argument(
+        "--override",
+        action="store_true",
+        help="Overwrite existing output if it exists",
+    )
+    parser.add_argument(
         "--verbose-errors",
         action="store_true",
         help="Log failed HTTP attempt details and print retry analysis at end",
@@ -960,6 +999,18 @@ def main():
     # Determine input path
     if args.input:
         input_path = args.input
+    elif args.run_type and (args.run_name or (args.year > 0 and args.month > 0)):
+        if args.month < 1 or args.month > 12:
+            logger.error("Error: month must be 1-12")
+            sys.exit(1)
+        run_name = args.run_name or f"{args.year}-{args.month:02d}"
+        from s3_io import build_local_path_for_run
+
+        input_path = str(
+            build_local_path_for_run(
+                args.local_root, args.run_type, run_name, "data", "tournament_ids.txt"
+            )
+        )
     elif args.year > 0 and args.month > 0:
         if args.month < 1 or args.month > 12:
             logger.error("Error: month must be 1-12")
@@ -968,12 +1019,13 @@ def main():
             args.data_dir, "tournament_ids", f"{args.year}_{args.month:02d}"
         )
     else:
-        logger.error("Error: specify --input or --year and --month")
+        logger.error("Error: specify --input or --year and --month (or --run-type)")
         sys.exit(1)
 
     # Determine output paths
     parquet_path = None
     json_path = None
+    report_base = None
     if args.output:
         # If user specifies output, use it as base for parquet, add .json for sample
         if args.output.endswith(".json"):
@@ -985,12 +1037,51 @@ def main():
         else:
             parquet_path = args.output + ".parquet"
             json_path = args.output + "_sample.json"
+        report_base = None
+    elif args.run_type and (args.run_name or (args.year > 0 and args.month > 0)):
+        run_name = args.run_name or f"{args.year}-{args.month:02d}"
+        from s3_io import build_local_path_for_run
+
+        parquet_path = str(
+            build_local_path_for_run(
+                args.local_root,
+                args.run_type,
+                run_name,
+                "data",
+                "tournament_details.parquet",
+            )
+        )
+        json_path = str(
+            build_local_path_for_run(
+                args.local_root,
+                args.run_type,
+                run_name,
+                "sample",
+                "tournament_details_sample.json",
+            )
+        )
+        report_base = str(
+            build_local_path_for_run(
+                args.local_root,
+                args.run_type,
+                run_name,
+                "reports",
+                "tournament_details",
+            )
+        )
     elif args.year > 0 and args.month > 0:
         base_path = os.path.join(
             args.data_dir, "tournament_details", f"{args.year}_{args.month:02d}"
         )
         parquet_path = base_path + ".parquet"
         json_path = base_path + "_sample.json"
+        report_base = None
+
+    if not args.override and os.path.exists(parquet_path):
+        logger.info(
+            "Output %s already exists. Use --override to replace.", parquet_path
+        )
+        sys.exit(0)
 
     # Read tournament IDs
     try:
@@ -1035,7 +1126,17 @@ def main():
                 save_results_parquet(all_results, parquet_path)
                 if json_path:
                     save_results_json_sample(all_results, json_path, sample_size=100)
-                build_and_save_report(all_results, parquet_path)
+                build_and_save_report(
+                    all_results, parquet_path, report_base=report_base
+                )
+                save_failures_json(
+                    all_results,
+                    (
+                        report_base
+                        if report_base
+                        else parquet_path.replace(".parquet", "")
+                    ),
+                )
                 logger.info("Saved %d results to %s", len(all_results), parquet_path)
             except Exception as e:
                 logger.error("Error saving partial results: %s", e)
@@ -1240,9 +1341,12 @@ def main():
             save_results_json_sample(all_results, json_path, sample_size=100)
 
         # Build and save report (distributions, nulls, time_control unique values)
-        build_and_save_report(all_results, parquet_path)
+        build_and_save_report(all_results, parquet_path, report_base=report_base)
         # Save failures for investigation
-        save_failures_json(all_results, parquet_path)
+        save_failures_json(
+            all_results,
+            report_base if report_base else parquet_path.replace(".parquet", ""),
+        )
     else:
         # If no output path specified, dump to stdout as JSON (for backwards compatibility)
         json.dump(all_results, sys.stdout, indent=2, ensure_ascii=False)

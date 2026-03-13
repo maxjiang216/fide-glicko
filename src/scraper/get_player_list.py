@@ -29,6 +29,7 @@ import requests
 
 from s3_io import (
     build_s3_uri,
+    build_s3_uri_for_run,
     download_to_file,
     is_s3_path,
     output_exists,
@@ -578,7 +579,8 @@ def _save_results(
 
 
 def run(
-    output_prefix: str,
+    run_type: str,
+    run_name: str | None,
     bucket: str = "fide-glicko",
     override: bool = False,
     quiet: bool = False,
@@ -588,11 +590,13 @@ def run(
     Download FIDE player list and write to S3.
 
     Args:
-        output_prefix: S3 prefix under bucket (e.g. "data" or "runs/dev-123").
+        run_type: One of prod, custom, test.
+        run_name: Required for prod/custom (e.g. "2024-01"). Ignored for test.
         bucket: S3 bucket name.
         override: If True, overwrite existing files.
         quiet: If True, reduce log output.
         federations_s3_uri: Optional S3 URI for federations.csv (for report's fed check).
+            Defaults to {base}/data/federations.csv when None.
 
     Returns:
         0 on success, 1 on failure.
@@ -604,7 +608,9 @@ def run(
     else:
         logging.getLogger().setLevel(logging.INFO)
 
-    parquet_uri = build_s3_uri(bucket, output_prefix, "players_list.parquet")
+    parquet_uri = build_s3_uri_for_run(
+        bucket, run_type, run_name, "data", "players_list.parquet"
+    )
     if output_exists(parquet_uri) and not override:
         logger.info(
             "Output %s already exists. Use override=True to replace.", parquet_uri
@@ -612,18 +618,27 @@ def run(
         return 0
 
     federations_path: Path | None = None
-    if federations_s3_uri:
+    fed_uri = federations_s3_uri or build_s3_uri_for_run(
+        bucket, run_type, run_name, "data", "federations.csv"
+    )
+    if fed_uri:
         try:
             federations_path = download_to_file(
-                federations_s3_uri, Path(tempfile.gettempdir()) / "federations.csv"
+                fed_uri, Path(tempfile.gettempdir()) / "federations.csv"
             )
-            logger.info("Loaded federations from %s", federations_s3_uri)
+            logger.info("Loaded federations from %s", fed_uri)
         except Exception as e:
             logger.warning("Could not load federations from S3: %s", e)
 
-    json_sample_uri = build_s3_uri(bucket, output_prefix, "players_list_sample.json")
-    xml_uri = build_s3_uri(bucket, output_prefix, "players_list.xml")
-    report_uri = build_s3_uri(bucket, output_prefix, "players_list_report.json")
+    json_sample_uri = build_s3_uri_for_run(
+        bucket, run_type, run_name, "sample", "players_list_sample.json"
+    )
+    xml_uri = build_s3_uri_for_run(
+        bucket, run_type, run_name, "data", "players_list.xml"
+    )
+    report_uri = build_s3_uri_for_run(
+        bucket, run_type, run_name, "reports", "players_list_report.json"
+    )
 
     def _save(players, parse_stats, xml_content):
         _save_results(
@@ -682,20 +697,39 @@ def main() -> int:
         "--output-prefix",
         type=str,
         default=None,
-        help="S3 output prefix (e.g. data). When set, writes to S3 instead of local.",
+        help="(Deprecated) Use --run-type and --run-name. Legacy: treated as run_name with run_type=custom.",
+    )
+    parser.add_argument(
+        "--run-type",
+        type=str,
+        choices=("prod", "custom", "test"),
+        default=None,
+        help="Run type for S3 output (prod, custom, test). With --run-name, writes to S3.",
+    )
+    parser.add_argument(
+        "--run-name",
+        type=str,
+        default=None,
+        help="Run name (e.g. 2024-01). Required for prod/custom when writing to S3.",
     )
     parser.add_argument(
         "--bucket",
         type=str,
         default="fide-glicko",
-        help="S3 bucket (only used with --output-prefix)",
+        help="S3 bucket (only used with S3 output)",
+    )
+    parser.add_argument(
+        "--local-root",
+        type=str,
+        default="data",
+        help="Local bucket root for run structure",
     )
     parser.add_argument(
         "--directory",
         "-d",
         type=str,
         default="data",
-        help="Directory to output results (default: src/data when -d data)",
+        help="(Legacy) Directory for local output when not using run structure",
     )
     parser.add_argument(
         "--override",
@@ -730,38 +764,87 @@ def main() -> int:
     else:
         logging.getLogger().setLevel(logging.INFO)
 
-    if args.output_prefix is not None:
+    # S3 output: run_type + legacy --output-prefix (no --local-root from pipeline)
+    run_type = args.run_type
+    run_name = args.run_name
+    if run_type is None and args.output_prefix is not None:
+        run_type = "custom"
+        run_name = args.output_prefix
+    # S3 when run_type set and no explicit local-root from pipeline (output_prefix = legacy S3)
+    if run_type is not None and args.output_prefix is not None:
+        if run_type in ("prod", "custom") and not run_name:
+            logger.error("--run-name required when --run-type is prod or custom")
+            return 1
         fed_uri = (
             args.federations
             if args.federations and is_s3_path(args.federations)
-            else build_s3_uri(args.bucket, "data", "federations.csv")
+            else None
         )
         return run(
-            output_prefix=args.output_prefix,
+            run_type=run_type,
+            run_name=run_name,
             bucket=args.bucket,
             override=args.override,
             quiet=args.quiet,
             federations_s3_uri=fed_uri,
         )
 
-    # Local output (original behavior)
+    # Local output: run structure (--run-type, --run-name) or legacy
     src_dir = Path(__file__).resolve().parent.parent
     repo_root = src_dir.parent
-    output_dir = (
-        (src_dir / "data") if args.directory == "data" else Path(args.directory)
-    )
-    output_dir.mkdir(parents=True, exist_ok=True)
-    parquet_path = output_dir / "players_list.parquet"
-    json_sample_path = output_dir / "players_list_sample.json"
-    xml_path = output_dir / "players_list.xml"
-    report_path = (
-        Path(args.report) if args.report else output_dir / "players_list_report.json"
-    )
-    federations_path = (
-        Path(args.federations)
-        if args.federations
-        else repo_root / "data" / "federations.csv"
-    )
+    local_root = getattr(args, "local_root", "data")
+    if run_type and (run_name or run_type == "test"):
+        from s3_io import build_local_path_for_run
+
+        parquet_path = repo_root / build_local_path_for_run(
+            local_root, run_type, run_name or "", "data", "players_list.parquet"
+        )
+        json_sample_path = repo_root / build_local_path_for_run(
+            local_root, run_type, run_name or "", "sample", "players_list_sample.json"
+        )
+        xml_path = repo_root / build_local_path_for_run(
+            local_root, run_type, run_name or "", "data", "players_list.xml"
+        )
+        report_path = (
+            Path(args.report)
+            if args.report
+            else repo_root
+            / build_local_path_for_run(
+                local_root,
+                run_type,
+                run_name or "",
+                "reports",
+                "players_list_report.json",
+            )
+        )
+        federations_path = (
+            Path(args.federations)
+            if args.federations
+            else repo_root
+            / build_local_path_for_run(
+                local_root, run_type, run_name or "", "data", "federations.csv"
+            )
+        )
+        for p in (parquet_path, json_sample_path, xml_path, report_path):
+            p.parent.mkdir(parents=True, exist_ok=True)
+    else:
+        output_dir = (
+            (src_dir / "data") if args.directory == "data" else Path(args.directory)
+        )
+        output_dir.mkdir(parents=True, exist_ok=True)
+        parquet_path = output_dir / "players_list.parquet"
+        json_sample_path = output_dir / "players_list_sample.json"
+        xml_path = output_dir / "players_list.xml"
+        report_path = (
+            Path(args.report)
+            if args.report
+            else output_dir / "players_list_report.json"
+        )
+        federations_path = (
+            Path(args.federations)
+            if args.federations
+            else repo_root / "data" / "federations.csv"
+        )
 
     if parquet_path.exists() and not args.override:
         logger.info("File %s already exists. Use --override to replace.", parquet_path)

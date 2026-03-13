@@ -4,7 +4,7 @@ Run split IDs locally and report peak memory (RSS).
 
 Usage:
   python exploratory/measure_split_ids_memory.py
-  python exploratory/measure_split_ids_memory.py --ids data/tournament_ids/2024_01 --chunk-count 50
+  python exploratory/measure_split_ids_memory.py --ids data/tournament_ids/2024_01 --chunk-size 225
 
 Uses resource.getrusage to report max RSS. Split IDs is lightweight; this validates sizing.
 """
@@ -24,7 +24,8 @@ from split_tournament_ids import run
 def main() -> int:
     parser = argparse.ArgumentParser(description="Profile split IDs memory usage")
     parser.add_argument("--ids", default=None, help="Path to tournament IDs file")
-    parser.add_argument("--chunk-count", "-n", type=int, default=50, help="Number of chunks")
+    parser.add_argument("--chunk-count", "-n", type=int, default=None, help="Number of chunks (overrides chunk-size)")
+    parser.add_argument("--chunk-size", type=int, default=225, help="Max tournaments per chunk (default: 225)")
     args = parser.parse_args()
 
     ids_path = args.ids or str(REPO_ROOT / "data" / "tournament_ids" / "2024_01")
@@ -35,6 +36,7 @@ def main() -> int:
     chunks = run(
         ids_path=ids_path,
         chunk_count=args.chunk_count,
+        chunk_size=args.chunk_size,
         bucket="fide-glicko",
         output_prefix="data",
         year=2024,

@@ -4,10 +4,13 @@ S3 I/O helpers for flexible output (local path or S3 URI).
 Used by scrapers when running in Lambda or with --output s3://...
 """
 
+import json
 from pathlib import Path
 from typing import Optional
 
 S3_PREFIX = "s3://"
+
+VALID_RUN_TYPES = ("prod", "custom", "test")
 
 
 def is_s3_path(path: str) -> bool:
@@ -99,3 +102,82 @@ def download_to_file(s3_uri: str, local_path: str | Path) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     s3.download_file(bucket, key, str(path))
     return path
+
+
+def build_run_base(run_type: str, run_name: str | None) -> str:
+    """
+    Return key prefix like 'prod/2024-01' or 'test'. Validates run_type.
+    """
+    if run_type not in VALID_RUN_TYPES:
+        raise ValueError(f"run_type must be one of {VALID_RUN_TYPES}")
+    if run_type in ("prod", "custom") and not run_name:
+        raise ValueError("run_name required when run_type is prod or custom")
+    if run_type == "test":
+        return "test"
+    return f"{run_type}/{run_name}"
+
+
+def build_s3_uri_for_run(
+    bucket: str,
+    run_type: str,
+    run_name: str | None,
+    subfolder: str,
+    *path_parts: str,
+) -> str:
+    """Build s3://bucket/key for run. subfolder is data, sample, or reports."""
+    base = build_run_base(run_type, run_name)
+    key = "/".join([base, subfolder] + list(path_parts))
+    return f"{S3_PREFIX}{bucket}/{key}"
+
+
+def build_local_path_for_run(
+    local_root: str | Path,
+    run_type: str,
+    run_name: str | None,
+    subfolder: str,
+    *path_parts: str,
+) -> Path:
+    """
+    Build local path for run. local_root = data (bucket equivalent); mirrors S3 key structure.
+    """
+    base = build_run_base(run_type, run_name)
+    parts = [base, subfolder] + list(path_parts)
+    return Path(local_root) / "/".join(parts)
+
+
+def write_run_metadata(
+    base_path: str | Path,
+    metadata: dict,
+    merge: bool = True,
+) -> None:
+    """
+    Write run_metadata.json at run root (not in data/sample/reports).
+    base_path: S3 URI (s3://bucket/prod/2024-01) or local path (data/prod/2024-01).
+    merge: If True and file exists, merge metadata into existing; else overwrite.
+    """
+    if is_s3_path(str(base_path)):
+        bucket, key_prefix = parse_s3_uri(str(base_path))
+        uri = f"{S3_PREFIX}{bucket}/{key_prefix}/run_metadata.json"
+        if merge:
+            try:
+                import boto3
+
+                s3 = boto3.client("s3")
+                obj = s3.get_object(
+                    Bucket=bucket, Key=f"{key_prefix}/run_metadata.json"
+                )
+                existing = json.loads(obj["Body"].read().decode("utf-8"))
+                metadata = {**existing, **metadata}
+            except Exception:
+                pass
+        write_output(json.dumps(metadata, indent=2), uri)
+    else:
+        path = Path(base_path) / "run_metadata.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if merge and path.exists():
+            try:
+                existing = json.loads(path.read_text(encoding="utf-8"))
+                metadata = {**existing, **metadata}
+            except Exception:
+                pass
+        path.write_text(json.dumps(metadata, indent=2), encoding="utf-8")
