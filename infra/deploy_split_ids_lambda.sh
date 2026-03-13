@@ -55,7 +55,7 @@ else
   echo "Creating Lambda $FUNCTION_NAME..."
   ROLE_ARN="${LAMBDA_ROLE_ARN:-}"
   if [[ -z "$ROLE_ARN" ]]; then
-    echo "Error: Set LAMBDA_ROLE_ARN (execution role with S3 + CloudWatch + lambda:InvokeFunction)."
+    echo "Error: Set LAMBDA_ROLE_ARN (execution role with S3 + CloudWatch)."
     exit 1
   fi
   aws lambda create-function \
@@ -68,5 +68,5 @@ else
     --memory-size "$MEMORY"
 fi
 
-echo "Done. Invoke with:"
-echo "  aws lambda invoke --function-name $FUNCTION_NAME --payload '{\"year\":2024,\"month\":1,\"invoke_tournaments\":true,\"chunk_count\":50}' out.json && cat out.json"
+echo "Done. Invoke with (tournaments Lambda must have run first):"
+echo "  aws lambda invoke --function-name $FUNCTION_NAME --payload '{\"year\":2024,\"month\":1}' out.json && cat out.json"

@@ -16,6 +16,11 @@ import re
 import sys
 from pathlib import Path
 
+# Ensure scraper modules (s3_io) are importable when using run structure
+_SCRAPER_DIR = Path(__file__).resolve().parent.parent / "src" / "scraper"
+if str(_SCRAPER_DIR) not in sys.path:
+    sys.path.insert(0, str(_SCRAPER_DIR))
+
 import pandas as pd
 
 logging.basicConfig(
@@ -298,6 +303,25 @@ def main() -> int:
         help="Base data directory",
     )
     parser.add_argument(
+        "--local-root",
+        type=str,
+        default="data",
+        help="Local bucket root for run structure",
+    )
+    parser.add_argument(
+        "--run-type",
+        type=str,
+        choices=("prod", "custom", "test"),
+        default=None,
+        help="Run type; with --run-name uses run path structure",
+    )
+    parser.add_argument(
+        "--run-name",
+        type=str,
+        default=None,
+        help="Run name (e.g. 2024-01)",
+    )
+    parser.add_argument(
         "--players-path",
         type=str,
         default="",
@@ -328,15 +352,32 @@ def main() -> int:
 
     base = Path(__file__).resolve().parent.parent
     month_key = f"{args.year}_{args.month:02d}"
+    run_name = args.run_name or month_key.replace("_", "-")
 
     # Paths
-    players_path = (
-        Path(args.players_path)
-        if args.players_path
-        else base / "src" / "data" / "players_list.parquet"
-    )
-    details_path = base / args.data_dir / "tournament_details" / f"{month_key}.parquet"
-    reports_path = base / args.data_dir / "tournament_reports" / f"{month_key}_games.parquet"
+    if args.run_type:
+        from s3_io import build_local_path_for_run
+        players_path = (
+            Path(args.players_path)
+            if args.players_path
+            else base / build_local_path_for_run(
+                args.local_root, args.run_type, run_name, "data", "players_list.parquet"
+            )
+        )
+        details_path = base / build_local_path_for_run(
+            args.local_root, args.run_type, run_name, "data", "tournament_details.parquet"
+        )
+        reports_path = base / build_local_path_for_run(
+            args.local_root, args.run_type, run_name, "data", "tournament_reports_games.parquet"
+        )
+    else:
+        players_path = (
+            Path(args.players_path)
+            if args.players_path
+            else base / "src" / "data" / "players_list.parquet"
+        )
+        details_path = base / args.data_dir / "tournament_details" / f"{month_key}.parquet"
+        reports_path = base / args.data_dir / "tournament_reports" / f"{month_key}_games.parquet"
 
     logger.info("Validating year=%s month=%s", args.year, args.month)
 

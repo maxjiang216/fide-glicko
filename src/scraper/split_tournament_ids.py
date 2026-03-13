@@ -93,7 +93,8 @@ def even_split(items: List[str], n: int) -> List[List[str]]:
 
 def run(
     ids_path: str,
-    chunk_count: int,
+    chunk_count: Optional[int] = None,
+    chunk_size: int = 225,
     bucket: str = "fide-glicko",
     output_prefix: str = "data",
     year: Optional[int] = None,
@@ -108,7 +109,8 @@ def run(
 
     Args:
         ids_path: Path to tournament IDs file (one per line). S3 or local.
-        chunk_count: Number of chunks for even split.
+        chunk_count: Number of chunks (optional). If not set, derived from chunk_size.
+        chunk_size: Max tournaments per chunk when chunk_count not set (default: 225).
         bucket: S3 bucket (for building chunk/output paths if using S3).
         output_prefix: S3 prefix (e.g. "data" or "runs/dev-123").
         year: Year for path building (optional; extracted from ids_path if missing).
@@ -129,25 +131,39 @@ def run(
         logger.error("No tournament IDs found in %s", ids_path)
         return []
 
-    if chunk_count <= 0:
+    if chunk_count is not None and chunk_count <= 0:
         logger.error("chunk_count must be positive")
         return []
+    if chunk_size <= 0:
+        logger.error("chunk_size must be positive")
+        return []
 
-    # Derive year_month from ids_path if not provided (e.g. "2024_01" from ".../2024_01")
-    year_month = None
-    if year is not None and month is not None:
-        year_month = f"{year}_{month:02d}"
+    n_chunks = (
+        chunk_count
+        if chunk_count is not None
+        else max(1, (len(ids) + chunk_size - 1) // chunk_size)
+    )
+
+    # Derive run_base from ids_path: .../data/tournament_ids.txt -> ... (run root)
+    if _is_s3(ids_path):
+        # s3://bucket/prod/2024-01/data/tournament_ids.txt -> s3://bucket/prod/2024-01
+        if "/data/tournament_ids.txt" in ids_path:
+            run_base = ids_path.replace("/data/tournament_ids.txt", "").rstrip("/")
+        else:
+            run_base = (
+                f"s3://{bucket}/{output_prefix}"
+                if output_prefix
+                else ids_path.rsplit("/", 2)[0]
+            )
     else:
-        base = Path(ids_path).name
-        # Match YYYY_MM (e.g. 2024_01) in filename
-        for part in base.replace(".", "_").split("_"):
-            if len(part) == 6 and part[:4].isdigit() and part[4:6].isdigit():
-                year_month = part
-                break
-        if not year_month:
-            year_month = "unknown"
+        # data/prod/2024-01/data/tournament_ids.txt -> data/prod/2024-01
+        ids_p = Path(ids_path)
+        if ids_p.name == "tournament_ids.txt" and ids_p.parent.name == "data":
+            run_base = str(ids_p.parent.parent)
+        else:
+            run_base = str(ids_p.parent)
 
-    chunks = even_split(ids, chunk_count)
+    chunks = even_split(ids, n_chunks)
     logger.info(
         "Split %d IDs into %d chunks (sizes %s)",
         len(ids),
@@ -158,20 +174,16 @@ def run(
     result = []
     for i, chunk_ids in enumerate(chunks):
         chunk_content = "\n".join(chunk_ids) + "\n"
-        if _is_s3(ids_path):
-            chunk_input_path = f"s3://{bucket}/{output_prefix}/tournament_ids/{year_month}_{chunk_prefix}_{i}"
-            chunk_output_path = f"s3://{bucket}/{output_prefix}/tournament_details/{year_month}_{output_part_prefix}_{i}"
+        # New structure: tournament_id_chunks/chunk_{i}.txt, tournament_details_chunks/chunk_{i}
+        if _is_s3(run_base):
+            chunk_input_path = f"{run_base}/data/tournament_id_chunks/chunk_{i}.txt"
+            chunk_output_path = f"{run_base}/data/tournament_details_chunks/chunk_{i}"
         else:
-            base = Path(ids_path)
-            chunks_dir = base.parent
-            chunk_input_path = str(chunks_dir / f"{year_month}_{chunk_prefix}_{i}")
-            # Match S3 layout: .../tournament_details/YYYY_MM_part_N (flat)
-            ids_dir_str = str(chunks_dir)
-            details_dir = Path(
-                ids_dir_str.replace("tournament_ids", "tournament_details")
+            chunk_input_path = str(
+                Path(run_base) / "data" / "tournament_id_chunks" / f"chunk_{i}.txt"
             )
             chunk_output_path = str(
-                details_dir / f"{year_month}_{output_part_prefix}_{i}"
+                Path(run_base) / "data" / "tournament_details_chunks" / f"chunk_{i}"
             )
 
         if not override and _output_exists(chunk_input_path):
@@ -194,48 +206,6 @@ def run(
     return result
 
 
-def invoke_tournaments_lambda(
-    year: int,
-    month: int,
-    bucket: str = "fide-glicko",
-    output_prefix: str = "data",
-    function_name: str = "fide-glicko-tournaments",
-    federations_s3_uri: Optional[str] = None,
-) -> bool:
-    """
-    Invoke the tournaments Lambda and wait for completion.
-
-    Returns True on success, False on failure.
-    """
-    import boto3
-
-    payload = {
-        "year": year,
-        "month": month,
-        "bucket": bucket,
-        "output_prefix": output_prefix,
-        "override": False,
-    }
-    if federations_s3_uri:
-        payload["federations_s3_uri"] = federations_s3_uri
-
-    client = boto3.client("lambda")
-    try:
-        resp = client.invoke(
-            FunctionName=function_name,
-            InvocationType="RequestResponse",
-            Payload=json.dumps(payload),
-        )
-        result = json.loads(resp["Payload"].read())
-        if result.get("statusCode") == 200 and result.get("success"):
-            return True
-        logger.error("Tournaments Lambda failed: %s", result)
-        return False
-    except Exception as e:
-        logger.error("Failed to invoke tournaments Lambda: %s", e)
-        return False
-
-
 def main() -> int:
     parser = argparse.ArgumentParser(
         description="Split tournament IDs into even chunks for fan-out",
@@ -249,8 +219,14 @@ def main() -> int:
         "--chunk-count",
         "-n",
         type=int,
-        default=50,
-        help="Number of chunks (default: 50)",
+        default=None,
+        help="Number of chunks (overrides --chunk-size if set)",
+    )
+    parser.add_argument(
+        "--chunk-size",
+        type=int,
+        default=225,
+        help="Max tournaments per chunk when chunk-count not set (default: 225)",
     )
     parser.add_argument(
         "--bucket",
@@ -293,6 +269,7 @@ def main() -> int:
     chunks = run(
         ids_path=args.ids,
         chunk_count=args.chunk_count,
+        chunk_size=args.chunk_size,
         bucket=args.bucket,
         output_prefix=args.output_prefix,
         year=args.year,

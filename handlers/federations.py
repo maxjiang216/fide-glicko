@@ -3,24 +3,28 @@ Lambda handler for federations scraper.
 
 Event shape:
 {
+    "run_type": "custom",
+    "run_name": "2024-01",
     "bucket": "fide-glicko",
-    "output_prefix": "data",
     "override": false
 }
 
-- bucket: S3 bucket name (default: fide-glicko)
-- output_prefix: Path prefix under bucket, e.g. "data" or "runs/dev-20250308-abc"
+- run_type: prod, custom, or test (default: custom)
+- run_name: Required for prod/custom (e.g. "2024-01"). Ignored for test.
+- bucket: S3 bucket (default: fide-glicko)
 - override: If true, overwrite existing file
 
-Output path: s3://{bucket}/{output_prefix}/federations.csv
-
-Logs go to CloudWatch Logs (/aws/lambda/<function-name>) - all logging output
-is captured. Use INFO level for verbose output (default).
+Output: s3://{bucket}/{run_type}/{run_name}/data/federations.csv
 """
 
 import logging
 
-from s3_io import build_s3_uri
+from s3_io import (
+    build_run_base,
+    build_s3_uri_for_run,
+    output_exists,
+    write_run_metadata,
+)
 from get_federations import run
 
 logger = logging.getLogger(__name__)
@@ -28,17 +32,51 @@ logger = logging.getLogger(__name__)
 
 def lambda_handler(event: dict, context) -> dict:
     """Lambda entry point for federations scraper."""
+    run_type = event.get("run_type", "custom")
+    run_name = event.get("run_name")
     bucket = event.get("bucket", "fide-glicko")
-    output_prefix = event.get("output_prefix", "data")
     override = event.get("override", False)
 
-    output_path = build_s3_uri(bucket, output_prefix, "federations.csv")
+    if run_type not in ("prod", "custom", "test"):
+        return {
+            "statusCode": 400,
+            "success": False,
+            "error": f"run_type must be one of prod, custom, test (got {run_type!r})",
+        }
+    if run_type in ("prod", "custom") and not run_name:
+        return {
+            "statusCode": 400,
+            "success": False,
+            "error": "run_name required when run_type is prod or custom",
+        }
+
+    output_path = build_s3_uri_for_run(
+        bucket, run_type, run_name, "data", "federations.csv"
+    )
+
+    if not override and output_exists(output_path):
+        return {
+            "statusCode": 409,
+            "success": False,
+            "error": "Output already exists; pass override=true to replace",
+            "output_path": output_path,
+        }
+
     logger.info(
-        "Starting federations scrape: bucket=%s prefix=%s override=%s -> %s",
+        "Starting federations scrape: bucket=%s run_type=%s run_name=%s override=%s -> %s",
         bucket,
-        output_prefix,
+        run_type,
+        run_name,
         override,
         output_path,
+    )
+
+    base_key = build_run_base(run_type, run_name)
+    base_uri = f"s3://{bucket}/{base_key}"
+    write_run_metadata(
+        base_uri,
+        {"step": "federations", "run_type": run_type, "run_name": run_name or ""},
+        merge=False,
     )
 
     exit_code = run(

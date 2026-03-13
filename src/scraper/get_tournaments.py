@@ -23,6 +23,7 @@ from typing import List, Optional, Tuple, Union
 import aiohttp
 
 from s3_io import (
+    build_local_path_for_run,
     build_s3_uri,
     download_to_file,
     is_s3_path,
@@ -381,9 +382,15 @@ def graceful_shutdown(signum: int, frame) -> None:
             ids_path = Path(output_path)
             ids_path.parent.mkdir(parents=True, exist_ok=True)
             ids_path.write_text(ids_content, encoding="utf-8")
-            json_path = ids_path.parent.parent / "tournament_ids_json" / ids_path.name
-            if json_path.suffix != ".json":
-                json_path = json_path.with_suffix(".json")
+            json_uri_shutdown = _shutdown_state.get("json_uri")
+            if json_uri_shutdown:
+                json_path = Path(json_uri_shutdown)
+            else:
+                json_path = (
+                    ids_path.parent.parent / "tournament_ids_json" / ids_path.name
+                )
+                if json_path.suffix != ".json":
+                    json_path = json_path.with_suffix(".json")
             json_path.parent.mkdir(parents=True, exist_ok=True)
             json_path.write_text(json_content, encoding="utf-8")
 
@@ -413,15 +420,23 @@ def graceful_shutdown(signum: int, frame) -> None:
     print(f"  Unique tournament IDs: {len(unique_tournaments)}")
     print(f"  Time elapsed: {format_time(elapsed_time)}")
     if output_path:
+        json_uri_shutdown = _shutdown_state.get("json_uri")
         if is_s3_path(str(output_path)):
-            json_uri = _json_uri_from_ids_uri(str(output_path))
+            json_uri_disp = json_uri_shutdown or _json_uri_from_ids_uri(
+                str(output_path)
+            )
             print(f"  IDs file: {output_path}")
-            print(f"  JSON file: {json_uri}")
+            print(f"  JSON file: {json_uri_disp}")
         else:
             ids_path = Path(output_path)
-            json_path = ids_path.parent.parent / "tournament_ids_json" / ids_path.name
-            if json_path.suffix != ".json":
-                json_path = json_path.with_suffix(".json")
+            if json_uri_shutdown:
+                json_path = Path(json_uri_shutdown)
+            else:
+                json_path = (
+                    ids_path.parent.parent / "tournament_ids_json" / ids_path.name
+                )
+                if json_path.suffix != ".json":
+                    json_path = json_path.with_suffix(".json")
             print(f"  IDs file: {ids_path}")
             print(f"  JSON file: {json_path}")
     if log_entries and log_path:
@@ -432,13 +447,19 @@ def graceful_shutdown(signum: int, frame) -> None:
 
 
 def _json_uri_from_ids_uri(ids_uri: str) -> str:
-    """Derive JSON output URI from IDs URI: .../tournament_ids/2025_03 -> .../tournament_ids_json/2025_03.json"""
-    if not ids_uri.endswith(".json"):
-        json_uri = ids_uri.replace("/tournament_ids/", "/tournament_ids_json/")
-        if not json_uri.endswith(".json"):
-            json_uri = json_uri + ".json"
-        return json_uri
-    return ids_uri
+    """Derive JSON sample URI from IDs URI."""
+    if ids_uri.endswith(".json"):
+        return ids_uri
+    # New structure: .../data/tournament_ids.txt -> .../sample/tournament_ids_sample.json
+    if "/data/tournament_ids.txt" in ids_uri:
+        return ids_uri.replace(
+            "/data/tournament_ids.txt", "/sample/tournament_ids_sample.json"
+        )
+    # Legacy: .../tournament_ids/2025_03 -> .../tournament_ids_json/2025_03.json
+    json_uri = ids_uri.replace("/tournament_ids/", "/tournament_ids_json/")
+    if not json_uri.endswith(".json"):
+        json_uri = json_uri + ".json"
+    return json_uri
 
 
 async def scrape_month(
@@ -448,6 +469,7 @@ async def scrape_month(
     output_path: Union[Path, str],
     output_format: str = "ids",
     max_concurrency: int = 20,
+    json_uri: Optional[str] = None,
     max_retries: int = 3,
     retry_delay: float = 1.0,
     limit: int = 0,
@@ -488,6 +510,7 @@ async def scrape_month(
     _shutdown_state = {
         "all_tournaments": [],
         "output_path": output_path,
+        "json_uri": json_uri,
         "log_path": None,  # Will be set if log_entries exist
         "log_entries": [],
         "processed_count": 0,
@@ -572,7 +595,9 @@ async def scrape_month(
         unique_tournaments = unique_tournaments[:limit]
         logger.info(f"Limited to first {limit} unique tournaments")
 
-    # Prepare JSON data
+    # Prepare JSON sample (first 50 for sanity check that IDs/metadata look correct)
+    SAMPLE_SIZE = 50
+    sample_tournaments = unique_tournaments[:SAMPLE_SIZE]
     output_data = [
         {
             "tournament_id": t.tournament_id,
@@ -583,27 +608,34 @@ async def scrape_month(
             "end_date": t.end_date,
             "federation": t.federation,
         }
-        for t in unique_tournaments
+        for t in sample_tournaments
     ]
 
-    # Write both formats to separate subfolders (local or S3)
+    # Write full IDs to data, sample JSON to sample/
     ids_content = "\n".join(t.tournament_id for t in unique_tournaments) + "\n"
     json_content = json.dumps(output_data, indent=2, ensure_ascii=False)
 
-    if is_s3_path(str(output_path)):
-        ids_uri = str(output_path)
-        json_uri = _json_uri_from_ids_uri(ids_uri)
+    ids_uri = str(output_path)
+    if json_uri is None and is_s3_path(ids_uri):
+        json_uri_val = _json_uri_from_ids_uri(ids_uri)
+    elif json_uri is None:
+        ids_path_tmp = Path(output_path)
+        json_uri_val = str(
+            ids_path_tmp.parent.parent / "sample" / "tournament_ids_sample.json"
+        )
+    else:
+        json_uri_val = json_uri
+
+    if is_s3_path(ids_uri):
         write_output(ids_content, ids_uri)
-        write_output(json_content, json_uri)
+        write_output(json_content, json_uri_val)
         ids_path = ids_uri
-        json_path = json_uri
+        json_path = json_uri_val
     else:
         ids_path = Path(output_path)
+        json_path = Path(json_uri_val)
         ids_path.parent.mkdir(parents=True, exist_ok=True)
         ids_path.write_text(ids_content, encoding="utf-8")
-        json_path = ids_path.parent.parent / "tournament_ids_json" / ids_path.name
-        if json_path.suffix != ".json":
-            json_path = json_path.with_suffix(".json")
         json_path.parent.mkdir(parents=True, exist_ok=True)
         json_path.write_text(json_content, encoding="utf-8")
 
@@ -642,19 +674,23 @@ def run(
     override: bool = False,
     quiet: bool = False,
     max_concurrency: int = 20,
+    ids_uri: Optional[str] = None,
+    json_uri: Optional[str] = None,
 ) -> int:
     """
-    Scrape tournament IDs for a month and write to S3.
+    Scrape tournament IDs for a month and write to S3 or local.
 
     Args:
         year: Year to scrape.
         month: Month to scrape (1-12).
-        bucket: S3 bucket name.
-        output_prefix: S3 prefix (e.g. "data" or "runs/dev-123").
+        bucket: S3 bucket name (used when ids_uri/json_uri not provided).
+        output_prefix: S3 prefix (used when ids_uri/json_uri not provided).
         federations_s3_uri: S3 URI for federations.csv.
         override: If True, overwrite existing output.
         quiet: If True, reduce log output.
         max_concurrency: Max concurrent requests.
+        ids_uri: Output path for IDs file (overrides bucket/output_prefix when set).
+        json_uri: Output path for JSON sample (overrides derivation when set).
 
     Returns:
         0 on success, 1 on failure.
@@ -666,9 +702,17 @@ def run(
     if quiet:
         logging.getLogger().setLevel(logging.WARNING)
 
-    ids_uri = build_s3_uri(
-        bucket, f"{output_prefix}/tournament_ids", f"{year}_{month:02d}"
-    )
+    if ids_uri is None:
+        ids_uri = build_s3_uri(
+            bucket, f"{output_prefix}/tournament_ids", f"{year}_{month:02d}"
+        )
+    if json_uri is None and is_s3_path(ids_uri):
+        json_uri = _json_uri_from_ids_uri(ids_uri)
+    elif json_uri is None:
+        # Local: sample/tournament_ids_sample.json (sanity check sample)
+        ids_path = Path(ids_uri)
+        json_uri = str(ids_path.parent.parent / "sample" / "tournament_ids_sample.json")
+
     if output_exists(ids_uri) and not override:
         logger.info("Output %s already exists. Use override=True to replace.", ids_uri)
         return 0
@@ -693,6 +737,7 @@ def run(
                 ids_uri,
                 output_format="ids",
                 max_concurrency=max_concurrency,
+                json_uri=json_uri,
             )
         )
         return 0
@@ -718,18 +763,37 @@ def main() -> int:
         "--month", type=int, required=True, help="Month to scrape (1-12)"
     )
     parser.add_argument(
+        "--local-root",
+        type=str,
+        default="data",
+        help="Local bucket root for run structure",
+    )
+    parser.add_argument(
+        "--run-type",
+        type=str,
+        choices=("prod", "custom", "test"),
+        default=None,
+        help="Run type; with --run-name builds paths under local-root",
+    )
+    parser.add_argument(
+        "--run-name",
+        type=str,
+        default=None,
+        help="Run name (e.g. 2024-01). Derived from year/month when --run-type set.",
+    )
+    parser.add_argument(
         "--federations",
         "-f",
         type=str,
-        default="data/federations.csv",
-        help="Path to federations CSV file (default: data/federations.csv from repo root)",
+        default=None,
+        help="Path to federations CSV. Default: {local-root}/{run-type}/{run-name}/data/federations.csv",
     )
     parser.add_argument(
         "--output",
         "-o",
         type=str,
         default=None,
-        help="Output file path (default: data/tournament_ids_YYYY_MM from repo root)",
+        help="(Legacy) Explicit output path. Overrides run structure.",
     )
     parser.add_argument(
         "--format",
@@ -761,6 +825,11 @@ def main() -> int:
         "--quiet", "-q", action="store_true", help="Disable verbose output"
     )
     parser.add_argument(
+        "--override",
+        action="store_true",
+        help="Overwrite existing output if it exists",
+    )
+    parser.add_argument(
         "--limit",
         type=int,
         default=0,
@@ -778,19 +847,36 @@ def main() -> int:
     if args.quiet:
         logging.getLogger().setLevel(logging.WARNING)
 
-    # Determine paths relative to repo root
     repo_root = Path(__file__).parent.parent.parent
-    federations_path = repo_root / args.federations
 
-    if args.output:
+    # Path resolution
+    if args.run_type:
+        run_name = args.run_name or f"{args.year}-{args.month:02d}"
+        if args.run_type in ("prod", "custom") and not run_name:
+            logger.error("--run-name required when --run-type is prod or custom")
+            return 1
+        federations_path = repo_root / build_local_path_for_run(
+            args.local_root, args.run_type, run_name, "data", "federations.csv"
+        )
+        output_path = repo_root / build_local_path_for_run(
+            args.local_root, args.run_type, run_name, "data", "tournament_ids.txt"
+        )
+    elif args.output:
         output_path = Path(args.output)
         if not output_path.is_absolute():
             output_path = repo_root / output_path
+        if not str(output_path).endswith(".txt"):
+            output_path = Path(str(output_path) + ".txt")
+        federations_path = repo_root / (args.federations or "data/federations.csv")
     else:
-        # Always save to tournament_ids subfolder (format flag only affects which is primary)
         output_path = (
             repo_root / "data" / "tournament_ids" / f"{args.year}_{args.month:02d}"
         )
+        federations_path = repo_root / (args.federations or "data/federations.csv")
+
+    if not args.override and output_path.exists():
+        logger.info("Output %s already exists. Use --override to replace.", output_path)
+        return 0
 
     # Run the scraper
     try:
@@ -800,11 +886,12 @@ def main() -> int:
                 args.month,
                 federations_path,
                 output_path,
-                args.format,
-                args.concurrency,
-                args.max_retries,
-                args.retry_delay,
-                args.limit,
+                output_format=args.format,
+                max_concurrency=args.concurrency,
+                json_uri=None,
+                max_retries=args.max_retries,
+                retry_delay=args.retry_delay,
+                limit=args.limit,
             )
         )
         return 0

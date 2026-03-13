@@ -3,15 +3,15 @@
 Full FIDE data pipeline for a given month.
 
 Runs the complete pipeline in order:
-1. Get federations -> data/federations.csv
-2. Get tournaments -> data/tournament_ids/YYYY_MM
-3. Get tournament details -> data/tournament_details/YYYY_MM.parquet
-4. Get player list -> src/data/players_list.parquet
-5. Get tournament reports -> data/tournament_reports/YYYY_MM_players.parquet, _games.parquet
+1. Get federations -> {local_root}/{run_type}/{run_name}/data/federations.csv
+2. Get tournaments -> {local_root}/{run_type}/{run_name}/data/tournament_ids.txt
+3. Get tournament details -> {local_root}/{run_type}/{run_name}/data/tournament_details.parquet
+4. Get player list -> {local_root}/{run_type}/{run_name}/data/players_list.parquet
+5. Get tournament reports -> ...
 
-Optionally runs validation (player list vs reports, details vs reports).
+Default local_root=data, run_type=prod, run_name=YYYY-MM (from year/month).
 
-Use --test for a quick smoke run with limited sampling on the slower steps.
+Use --test for a quick smoke run with limited sampling.
 """
 
 import argparse
@@ -69,9 +69,18 @@ def main() -> int:
     )
     parser.add_argument(
         "--data-dir",
+        "--local-root",
+        dest="local_root",
         type=str,
         default="data",
-        help="Base data directory (default: data)",
+        help="Local bucket root; S3 structure mirrored under this dir (default: data)",
+    )
+    parser.add_argument(
+        "--run-type",
+        type=str,
+        choices=("prod", "custom", "test"),
+        default="prod",
+        help="Run type for path structure (default: prod)",
     )
     parser.add_argument(
         "--test",
@@ -128,7 +137,8 @@ def main() -> int:
 
     base_dir = Path(__file__).resolve().parent.parent
     month_key = f"{args.year}_{args.month:02d}"
-    data_dir = args.data_dir
+    run_name = f"{args.year}-{args.month:02d}"
+    local_root = getattr(args, "local_root", "data")
 
     # Determine limits for test mode
     limit_details = args.limit or (TEST_LIMIT_DETAILS if args.test else 0)
@@ -150,8 +160,12 @@ def main() -> int:
         fed_cmd = [
             sys.executable,
             str(SCRAPER_DIR / "get_federations.py"),
-            "--directory",
-            data_dir,
+            "--local-root",
+            local_root,
+            "--run-type",
+            args.run_type,
+            "--run-name",
+            run_name,
         ] + common_quiet
         if args.override:
             fed_cmd.append("--override")
@@ -166,10 +180,12 @@ def main() -> int:
         str(args.year),
         "--month",
         str(args.month),
-        "--federations",
-        f"{data_dir}/federations.csv",
-        "--output",
-        f"{data_dir}/tournament_ids/{month_key}",
+        "--local-root",
+        local_root,
+        "--run-type",
+        args.run_type,
+        "--run-name",
+        run_name,
     ] + common_quiet
     if limit_tournaments > 0:
         tournaments_cmd.extend(["--limit", str(limit_tournaments)])
@@ -184,8 +200,12 @@ def main() -> int:
         str(args.year),
         "--month",
         str(args.month),
-        "--data-dir",
-        data_dir,
+        "--local-root",
+        local_root,
+        "--run-type",
+        args.run_type,
+        "--run-name",
+        run_name,
     ]
     if limit_details > 0:
         details_cmd.extend(["--limit", str(limit_details)])
@@ -197,6 +217,12 @@ def main() -> int:
         player_cmd = [
             sys.executable,
             str(SCRAPER_DIR / "get_player_list.py"),
+            "--local-root",
+            local_root,
+            "--run-type",
+            args.run_type,
+            "--run-name",
+            run_name,
         ] + common_quiet
         if args.override:
             player_cmd.append("--override")
@@ -211,8 +237,12 @@ def main() -> int:
         str(args.year),
         "--month",
         str(args.month),
-        "--data-dir",
-        data_dir,
+        "--local-root",
+        local_root,
+        "--run-type",
+        args.run_type,
+        "--run-name",
+        run_name,
     ]
     if limit_reports > 0:
         reports_cmd.extend(["--limit", str(limit_reports)])
@@ -232,8 +262,12 @@ def main() -> int:
             str(args.year),
             "--month",
             str(args.month),
-            "--data-dir",
-            data_dir,
+            "--local-root",
+            local_root,
+            "--run-type",
+            args.run_type,
+            "--run-name",
+            run_name,
         ]
         if args.quiet:
             validate_cmd.append("--quiet")

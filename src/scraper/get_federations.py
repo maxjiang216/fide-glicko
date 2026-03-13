@@ -19,7 +19,12 @@ from typing import List, Dict, Optional
 import requests
 from bs4 import BeautifulSoup
 
-from s3_io import is_s3_path, output_exists, write_output
+from s3_io import (
+    build_local_path_for_run,
+    is_s3_path,
+    output_exists,
+    write_output,
+)
 
 URL = "https://ratings.fide.com/rated_tournaments.phtml"
 
@@ -202,21 +207,40 @@ def main() -> int:
         "--output",
         type=str,
         default=None,
-        help="Output path: local file or S3 URI (s3://bucket/key). Overrides -d/-f.",
+        help="Output path: local file or S3 URI. Overrides path-building.",
+    )
+    parser.add_argument(
+        "--local-root",
+        type=str,
+        default="data",
+        help="Local bucket root for run structure (default: data)",
+    )
+    parser.add_argument(
+        "--run-type",
+        type=str,
+        choices=("prod", "custom", "test"),
+        default=None,
+        help="Run type (prod/custom/test). With --run-name, builds path.",
+    )
+    parser.add_argument(
+        "--run-name",
+        type=str,
+        default=None,
+        help="Run name (e.g. 2024-01). Required for prod/custom with --run-type.",
     )
     parser.add_argument(
         "--directory",
         "-d",
         type=str,
         default="data",
-        help="Directory to output (default: data). Ignored if --output is set.",
+        help="(Legacy) Directory when not using run structure.",
     )
     parser.add_argument(
         "--filename",
         "-f",
         type=str,
         default="federations.csv",
-        help="Output filename (default: federations.csv). Ignored if --output is set.",
+        help="(Legacy) Output filename when not using run structure.",
     )
     parser.add_argument(
         "--quiet",
@@ -235,6 +259,15 @@ def main() -> int:
 
     if args.output is not None:
         output_path = args.output
+    elif args.run_type:
+        if args.run_type in ("prod", "custom") and not args.run_name:
+            logger.error("--run-name required when --run-type is prod or custom")
+            return 1
+        path = build_local_path_for_run(
+            args.local_root, args.run_type, args.run_name, "data", "federations.csv"
+        )
+        output_path = str(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
     else:
         repo_root = Path(__file__).parent.parent.parent
         output_dir = repo_root / args.directory
