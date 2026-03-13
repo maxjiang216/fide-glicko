@@ -30,6 +30,7 @@ from s3_io import (
     download_to_file,
     is_s3_path,
     output_exists,
+    resolve_latest_federations_local,
     write_output,
 )
 
@@ -890,7 +891,8 @@ def main() -> int:
         if args.run_type in ("prod", "custom") and not run_name:
             logger.error("--run-name required when --run-type is prod or custom")
             return 1
-        federations_path = repo_root / build_local_path_for_run(
+        latest = resolve_latest_federations_local(repo_root / args.local_root)
+        federations_path = latest or repo_root / build_local_path_for_run(
             args.local_root, args.run_type, run_name, "data", "federations.csv"
         )
         output_path = repo_root / build_local_path_for_run(

@@ -30,12 +30,23 @@ import pandas as pd
 import requests
 
 from s3_io import (
+    build_player_lists_data_uri,
+    build_player_lists_raw_uri,
     build_s3_uri,
     build_s3_uri_for_run,
     download_to_file,
+    get_latest_in_local_prefix,
+    get_latest_in_s3_prefix,
     is_s3_path,
+    is_stale,
     output_exists,
+    resolve_latest_federations_uri,
+    resolve_latest_federations_local,
     write_output,
+    PLAYER_LISTS_DATA_PREFIX,
+    PLAYER_LISTS_RAW_PREFIX,
+    PLAYER_LISTS_REPORTS_PREFIX,
+    PLAYER_LISTS_SAMPLE_PREFIX,
 )
 
 logging.basicConfig(
@@ -589,6 +600,150 @@ def _save_results(
     logger.info("Saved report: %s", report_path)
 
 
+def run_shared(
+    bucket: str | None = None,
+    local_root: str | Path | None = None,
+    override: bool = False,
+    quiet: bool = False,
+    federations_uri: str | None = None,
+) -> str:
+    """
+    Download FIDE player list and write to shared path (player_lists/data/player_list_{timestamp}.parquet).
+    Skips fetch if latest exists and is < 2 weeks old (unless override).
+
+    Args:
+        bucket: S3 bucket. If None, uses local_root.
+        local_root: Local root (e.g. Path or "data"). Used when bucket is None.
+        override: If True, skip list check and always fetch + write.
+        quiet: Reduce log output.
+        federations_uri: S3 URI or path for federations (for report). If None, resolves latest.
+
+    Returns:
+        URI or path str of the parquet file used.
+    """
+    from datetime import datetime, timezone
+
+    global _shutdown_state
+
+    if quiet:
+        logging.getLogger().setLevel(logging.WARNING)
+
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+    use_s3 = bucket is not None
+
+    if use_s3:
+        parquet_uri = build_player_lists_data_uri(bucket, timestamp)
+        raw_uri = build_player_lists_raw_uri(bucket, timestamp)
+        sample_uri = f"s3://{bucket}/{PLAYER_LISTS_SAMPLE_PREFIX}/player_list_sample_{timestamp}.json"
+        report_uri = f"s3://{bucket}/{PLAYER_LISTS_REPORTS_PREFIX}/player_list_report_{timestamp}.json"
+    else:
+        root = Path(local_root or "data")
+        base_data = root / PLAYER_LISTS_DATA_PREFIX
+        base_raw = root / PLAYER_LISTS_RAW_PREFIX
+        base_sample = root / PLAYER_LISTS_SAMPLE_PREFIX
+        base_reports = root / PLAYER_LISTS_REPORTS_PREFIX
+        base_data.mkdir(parents=True, exist_ok=True)
+        base_raw.mkdir(parents=True, exist_ok=True)
+        base_sample.mkdir(parents=True, exist_ok=True)
+        base_reports.mkdir(parents=True, exist_ok=True)
+        parquet_path = base_data / f"player_list_{timestamp}.parquet"
+        raw_path = base_raw / f"player_list_{timestamp}.xml.gz"
+        sample_path = base_sample / f"player_list_sample_{timestamp}.json"
+        report_path = base_reports / f"player_list_report_{timestamp}.json"
+
+    if not override:
+        if use_s3:
+            latest_uri, last_modified = get_latest_in_s3_prefix(
+                bucket, PLAYER_LISTS_DATA_PREFIX + "/"
+            )
+            if latest_uri and last_modified and not is_stale(last_modified):
+                logger.info("Latest player list < 2 weeks old, reusing %s", latest_uri)
+                return latest_uri
+        else:
+            latest_path, mtime = get_latest_in_local_prefix(
+                local_root or "data", PLAYER_LISTS_DATA_PREFIX
+            )
+            if latest_path and mtime is not None and not is_stale(mtime):
+                logger.info("Latest player list < 2 weeks old, reusing %s", latest_path)
+                return str(latest_path)
+
+    federations_path: Path | None = None
+    fed_uri = federations_uri
+    if fed_uri is None:
+        if use_s3:
+            fed_uri = resolve_latest_federations_uri(bucket)
+        else:
+            fed_path = resolve_latest_federations_local(local_root or "data")
+            fed_uri = str(fed_path) if fed_path else None
+    if fed_uri:
+        try:
+            federations_path = download_to_file(
+                fed_uri, Path(tempfile.gettempdir()) / "federations_pl.csv"
+            )
+            logger.info("Loaded federations from %s for report", fed_uri)
+        except Exception as e:
+            logger.warning("Could not load federations: %s", e)
+
+    def _save(players, parse_stats, xml_content):
+        if use_s3:
+            _save_results(
+                players,
+                parse_stats,
+                xml_content,
+                parquet_uri,
+                sample_uri,
+                raw_uri,
+                report_uri,
+                federations_path,
+            )
+        else:
+            _save_results(
+                players,
+                parse_stats,
+                xml_content,
+                str(parquet_path),
+                str(sample_path),
+                str(raw_path),
+                str(report_path),
+                federations_path,
+            )
+
+    def _graceful_shutdown(signum, frame):
+        logger.warning("\nReceived interrupt, attempting graceful shutdown...")
+        state = _shutdown_state.get("state")
+        if state:
+            players, parse_stats, xml_content = state
+            if players:
+                _save(players, parse_stats, xml_content)
+        sys.exit(130 if signum == 2 else 0)
+
+    signal.signal(signal.SIGINT, _graceful_shutdown)
+    signal.signal(signal.SIGTERM, _graceful_shutdown)
+
+    logger.info("Downloading FIDE players list from %s...", DOWNLOAD_URL)
+    start = time.time()
+
+    try:
+        zip_bytes = download_player_list()
+        players, parse_stats, xml_content = _process_zip_internal(zip_bytes)
+    except Exception as e:
+        logger.error("Error: %s", e)
+        raise RuntimeError(f"Player list download failed: {e}") from e
+
+    if not players:
+        raise RuntimeError("No players parsed from XML")
+
+    _shutdown_state["state"] = (players, parse_stats, xml_content)
+    elapsed = time.time() - start
+    logger.info("Downloaded and parsed %d players in %.1fs", len(players), elapsed)
+
+    _save(players, parse_stats, xml_content)
+    if players:
+        logger.info("Sample row keys: %s", list(players[0].keys()))
+
+    return parquet_uri if use_s3 else str(parquet_path)
+
+
 def run(
     run_type: str,
     run_name: str | None,
@@ -800,62 +955,41 @@ def main() -> int:
             federations_s3_uri=fed_uri,
         )
 
-    # Local output: run structure (--run-type, --run-name) or legacy
+    # Local output: run structure uses shared path; legacy uses old structure
     src_dir = Path(__file__).resolve().parent.parent
     repo_root = src_dir.parent
     local_root = getattr(args, "local_root", "data")
     if run_type and (run_name or run_type == "test"):
-        from s3_io import build_local_path_for_run
+        # Use shared path (player_lists/data/{timestamp}.parquet)
+        fed_path = None
+        if args.federations:
+            fed_path = (
+                Path(args.federations) if Path(args.federations).exists() else None
+            )
+        run_shared(
+            local_root=repo_root / local_root,
+            override=args.override,
+            quiet=args.quiet,
+            federations_uri=str(fed_path) if fed_path else None,
+        )
+        return 0
 
-        parquet_path = repo_root / build_local_path_for_run(
-            local_root, run_type, run_name or "", "data", "players_list.parquet"
-        )
-        json_sample_path = repo_root / build_local_path_for_run(
-            local_root, run_type, run_name or "", "sample", "players_list_sample.json"
-        )
-        xml_path = repo_root / build_local_path_for_run(
-            local_root, run_type, run_name or "", "raw", "players_list.xml.gz"
-        )
-        report_path = (
-            Path(args.report)
-            if args.report
-            else repo_root
-            / build_local_path_for_run(
-                local_root,
-                run_type,
-                run_name or "",
-                "reports",
-                "players_list_report.json",
-            )
-        )
-        federations_path = (
-            Path(args.federations)
-            if args.federations
-            else repo_root
-            / build_local_path_for_run(
-                local_root, run_type, run_name or "", "data", "federations.csv"
-            )
-        )
-        for p in (parquet_path, json_sample_path, xml_path, report_path):
-            p.parent.mkdir(parents=True, exist_ok=True)
-    else:
-        output_dir = (
-            (src_dir / "data") if args.directory == "data" else Path(args.directory)
-        )
-        output_dir.mkdir(parents=True, exist_ok=True)
-        parquet_path = output_dir / "players_list.parquet"
-        json_sample_path = output_dir / "players_list_sample.json"
-        xml_path = output_dir / "raw" / "players_list.xml.gz"
-        report_path = (
-            Path(args.report)
-            if args.report
-            else output_dir / "players_list_report.json"
-        )
-        federations_path = (
-            Path(args.federations)
-            if args.federations
-            else repo_root / "data" / "federations.csv"
-        )
+    # Legacy: per-directory output (no run structure)
+    output_dir = (
+        (src_dir / "data") if args.directory == "data" else Path(args.directory)
+    )
+    output_dir.mkdir(parents=True, exist_ok=True)
+    parquet_path = output_dir / "players_list.parquet"
+    json_sample_path = output_dir / "players_list_sample.json"
+    xml_path = output_dir / "raw" / "players_list.xml.gz"
+    report_path = (
+        Path(args.report) if args.report else output_dir / "players_list_report.json"
+    )
+    federations_path = (
+        Path(args.federations)
+        if args.federations
+        else repo_root / "data" / "federations.csv"
+    )
 
     if parquet_path.exists() and not args.override:
         logger.info("File %s already exists. Use --override to replace.", parquet_path)

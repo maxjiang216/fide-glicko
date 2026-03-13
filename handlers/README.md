@@ -7,16 +7,14 @@ All Lambdas accept **run_type**, **run_name**, **bucket**, **override** where ap
 ### federations
 ```json
 {
-  "run_type": "prod",
-  "run_name": "2024-01",
   "bucket": "fide-glicko",
   "override": false
 }
 ```
-- **run_type**: prod | custom | test (default: custom)
-- **run_name**: Required for prod/custom. Ignored for test.
 - **bucket**: default fide-glicko
-- Output: `{base}/data/federations.csv`
+- **override**: If true, always fetch and write. Else skip if latest < 2 weeks old; only write if content changed (order-independent compare).
+- Output: `{bucket}/federations/data/federations_{timestamp}.csv` (shared across all run types)
+- Returns: `federations_uri`
 
 ### tournaments
 ```json
@@ -31,7 +29,7 @@ All Lambdas accept **run_type**, **run_name**, **bucket**, **override** where ap
 ```
 - **year**, **month**: Required
 - **run_type**, **run_name**: As above
-- **federations_s3_uri**: Optional. Defaults to `{base}/data/federations.csv`
+- **federations_s3_uri**: Optional. Defaults to latest in `{bucket}/federations/data/`
 - Outputs: `{base}/data/tournament_ids.txt`, `{base}/sample/tournament_ids_sample.json`, `{base}/raw/tournaments.json.gz` (raw API JSON, all federations concatenated, gzip-9)
 
 ### split_ids
@@ -87,19 +85,22 @@ All Lambdas accept **run_type**, **run_name**, **bucket**, **override** where ap
 ### player_list
 ```json
 {
-  "run_type": "custom",
-  "run_name": "2024-01",
   "bucket": "fide-glicko",
-  "override": false
+  "override": false,
+  "federations_uri": null
 }
 ```
-- **federations_s3_uri**: Optional. Defaults to `{base}/data/federations.csv`
-- Outputs: `{base}/data/players_list.parquet`, `{base}/raw/players_list.xml.gz`, `{base}/sample/players_list_sample.json`, `{base}/reports/players_list_report.json`
+- **bucket**: default fide-glicko
+- **override**: If true, always fetch and write. Else skip if latest < 2 weeks old.
+- **federations_uri**: Optional. For report. Defaults to latest in `{bucket}/federations/data/`.
+- Outputs: `{bucket}/player_lists/data/player_list_{timestamp}.parquet`, `{bucket}/player_lists/raw/player_list_{timestamp}.xml.gz`, etc. (shared across all run types)
+- Returns: `players_list_uri`
 
 ## Path formula
 
 - **base** = `{run_type}/{run_name}` for prod/custom, or `test` for run_type=test
-- **data**: `{bucket}/{base}/data/...`
-- **raw**: `{bucket}/{base}/raw/...` (compressed downloads, e.g. players_list.xml.gz)
+- **Shared** (federations, player list): `{bucket}/federations/data/federations_{timestamp}.csv`, `{bucket}/player_lists/data/player_list_{timestamp}.parquet`, `{bucket}/player_lists/raw/player_list_{timestamp}.xml.gz` — all run types share these; 2-week staleness check.
+- **Per-run data**: `{bucket}/{base}/data/...`
+- **raw**: `{bucket}/{base}/raw/...` (compressed downloads)
 - **sample**: `{bucket}/{base}/sample/...`
 - **reports**: `{bucket}/{base}/reports/...`

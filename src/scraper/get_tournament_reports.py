@@ -1807,17 +1807,13 @@ def main():
         if args.players_file:
             players_file_path = args.players_file
         elif args.run_type and args.year > 0 and args.month > 0:
-            from s3_io import build_local_path_for_run
+            from s3_io import resolve_latest_players_list_local
 
-            run_name = args.run_name or f"{args.year}-{args.month:02d}"
-            players_file_path = str(
-                build_local_path_for_run(
-                    args.local_root,
-                    args.run_type,
-                    run_name,
-                    "data",
-                    "players_list.parquet",
-                )
+            latest = resolve_latest_players_list_local(repo_root / args.local_root)
+            players_file_path = (
+                str(latest)
+                if latest
+                else str(repo_root / "src" / "data" / "players_list.parquet")
             )
         else:
             players_file_path = str(repo_root / "src" / "data" / "players_list.parquet")

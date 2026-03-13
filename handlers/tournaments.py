@@ -30,6 +30,7 @@ from s3_io import (
     build_run_base,
     build_s3_uri_for_run,
     output_exists,
+    resolve_latest_federations_uri,
     write_run_metadata,
 )
 from get_tournaments import run
@@ -84,9 +85,14 @@ def lambda_handler(event: dict, context) -> dict:
         }
 
     if federations_s3_uri is None:
-        federations_s3_uri = build_s3_uri_for_run(
-            bucket, run_type, run_name, "data", "federations.csv"
-        )
+        federations_s3_uri = resolve_latest_federations_uri(bucket)
+        if not federations_s3_uri:
+            return {
+                "statusCode": 404,
+                "success": False,
+                "error": "No federations found; run federations Lambda first",
+                "ids_uri": ids_uri,
+            }
 
     logger.info(
         "Starting tournaments scrape: year=%s month=%s bucket=%s run_type=%s run_name=%s override=%s -> %s",
@@ -109,6 +115,7 @@ def lambda_handler(event: dict, context) -> dict:
             "month": int(month),
             "run_type": run_type,
             "run_name": run_name or "",
+            "federations_uri": federations_s3_uri,
         },
         merge=True,
     )
