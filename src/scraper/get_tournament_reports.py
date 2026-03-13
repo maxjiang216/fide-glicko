@@ -9,6 +9,8 @@ Supports rate limiting, retries, checkpoints, and progress tracking.
 
 import argparse
 import copy
+import gzip
+import io
 import json
 import logging
 import os
@@ -16,6 +18,7 @@ import random
 import re
 import signal
 import sys
+import tempfile
 import time
 from collections import Counter
 from datetime import datetime
@@ -36,6 +39,23 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+class RateLimiter:
+    """Enforces minimum spacing between requests."""
+
+    def __init__(self, requests_per_second: float):
+        self.min_interval = 1.0 / requests_per_second if requests_per_second > 0 else 0
+        self.last_request = 0.0
+
+    def wait(self):
+        if self.min_interval <= 0:
+            return
+        now = time.perf_counter()
+        elapsed = now - self.last_request
+        if elapsed < self.min_interval:
+            time.sleep(self.min_interval - elapsed)
+        self.last_request = time.perf_counter()
+
+
 def format_duration(seconds: float) -> str:
     """Format duration in a human-readable way."""
     if seconds < 60:
@@ -48,6 +68,59 @@ def format_duration(seconds: float) -> str:
         hours = int(seconds // 3600)
         minutes = int((seconds % 3600) // 60)
         return f"{hours}h {minutes}m"
+
+
+# Optional S3 support (used by run() when paths are S3 URIs)
+def _is_s3(path: str) -> bool:
+    try:
+        from s3_io import is_s3_path
+
+        return is_s3_path(path)
+    except ImportError:
+        return path.strip().lower().startswith("s3://")
+
+
+def _compress_gzip(data: bytes, level: int = 9) -> bytes:
+    """Compress with gzip level 9."""
+    buf = io.BytesIO()
+    with gzip.GzipFile(fileobj=buf, mode="wb", compresslevel=level) as z:
+        z.write(data)
+    return buf.getvalue()
+
+
+def _raw_base_from_output_path(output_path: str) -> Optional[str]:
+    """Derive raw/reports base from output_path. Returns None if not derivable."""
+    if "/data/tournament_reports_chunks/" in output_path:
+        return output_path.replace(
+            "/data/tournament_reports_chunks/", "/raw/reports/"
+        ).rstrip("/")
+    return None
+
+
+def _write_to_path(path: str, content: bytes | str) -> None:
+    """Write content to path (local or S3)."""
+    if _is_s3(path):
+        from s3_io import write_output
+
+        write_output(content, path)
+    else:
+        p = Path(path)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        if isinstance(content, str):
+            p.write_text(content, encoding="utf-8")
+        else:
+            p.write_bytes(content)
+
+
+def _read_codes_from_path(path: str) -> List[str]:
+    """Read tournament codes from a file (local or S3)."""
+    if _is_s3(path):
+        from s3_io import download_to_file
+
+        local_path = Path(tempfile.gettempdir()) / "tournament_codes.txt"
+        download_to_file(path, local_path)
+        path = str(local_path)
+    return read_tournament_codes(path)
 
 
 def read_tournament_codes(file_path: str) -> List[str]:
@@ -362,13 +435,15 @@ def fetch_tournament_report(
     session: requests.Session,
     *,
     _attempt_log: Optional[List[Dict]] = None,
-) -> Tuple[Optional[Dict], Optional[str], int]:
+    return_raw: bool = False,
+) -> Tuple[Optional[Dict], Optional[str], int, Optional[bytes]]:
     """
     Fetch tournament report from FIDE website.
 
     Returns:
-        Tuple of (report_dict, error_string). If successful, report_dict is not None.
-        If error, error_string contains the error message.
+        Tuple of (report_dict, error_string, num_attempts, raw_content).
+        If successful, report_dict is not None.
+        raw_content is response bytes when return_raw=True, else None.
     """
     url = f"https://ratings.fide.com/tournament_src_report.phtml?code={tournament_code}"
 
@@ -426,9 +501,10 @@ def fetch_tournament_report(
                 report_start_iso = start_match.group(1)
 
             # Find the main results table
+            raw_content = response.content if return_raw else None
             table = soup.find("table", class_="calc_table")
             if not table:
-                return None, "no data found", len(attempt_times)
+                return None, "no data found", len(attempt_times), raw_content
 
             rows = table.find_all("tr")
 
@@ -568,7 +644,7 @@ def fetch_tournament_report(
                 i += 1
 
             if not players:
-                return None, "no players found", len(attempt_times)
+                return None, "no players found", len(attempt_times), raw_content
 
             report_dict = {
                 "tournament_code": tournament_code,
@@ -576,7 +652,7 @@ def fetch_tournament_report(
             }
             if report_start_iso:
                 report_dict["report_start"] = report_start_iso
-            return (report_dict, None, len(attempt_times))
+            return (report_dict, None, len(attempt_times), raw_content)
 
         except requests.exceptions.Timeout as e:
             last_error = f"timeout: {e}"
@@ -616,7 +692,7 @@ def fetch_tournament_report(
                     )
                 continue
             last_error = f"connection error: {e}"
-            return None, last_error, len(attempt_times)
+            return None, last_error, len(attempt_times), None
         except requests.exceptions.RequestException as e:
             error_str = str(e).lower()
             # Check for various connection error patterns that should be retried
@@ -643,7 +719,7 @@ def fetch_tournament_report(
                     )
                 continue
             last_error = f"network error: {e}"
-            return None, last_error, len(attempt_times)
+            return None, last_error, len(attempt_times), None
         except Exception as e:
             last_error = f"parse error: {e}"
             if _attempt_log is not None:
@@ -657,7 +733,7 @@ def fetch_tournament_report(
                 )
             continue
 
-    return None, f"max retries exceeded: {last_error}", len(attempt_times)
+    return None, f"max retries exceeded: {last_error}", len(attempt_times), None
 
 
 def flatten_result(result: Dict) -> List[Dict]:
@@ -1139,14 +1215,18 @@ def results_to_games_dataframe(
     return pd.DataFrame(all_games)
 
 
+def _write_parquet_to_path(df: pd.DataFrame, path: str) -> None:
+    """Write DataFrame to Parquet (local or S3)."""
+    buf = io.BytesIO()
+    df.to_parquet(buf, index=False, engine="pyarrow")
+    _write_to_path(path, buf.getvalue())
+
+
 def save_players_parquet(results: List[Dict], parquet_path: str):
     """Save players Parquet. PK: (player_id, tournament_id)."""
     try:
         df = results_to_players_dataframe(results)
-        dirname = os.path.dirname(parquet_path)
-        if dirname:
-            os.makedirs(dirname, exist_ok=True)
-        df.to_parquet(parquet_path, index=False, engine="pyarrow")
+        _write_parquet_to_path(df, parquet_path)
         logger.info(f"Saved {len(df)} player rows to {parquet_path}")
     except Exception as e:
         logger.error(f"Players Parquet save failed: {e}")
@@ -1160,10 +1240,7 @@ def save_games_parquet(
     """Save games as Parquet file (one row per game, main output format)."""
     try:
         df = results_to_games_dataframe(results, details_map=details_map)
-        dirname = os.path.dirname(parquet_path)
-        if dirname:
-            os.makedirs(dirname, exist_ok=True)
-        df.to_parquet(parquet_path, index=False, engine="pyarrow")
+        _write_parquet_to_path(df, parquet_path)
         logger.info(f"Saved {len(results)} tournament(s) to {parquet_path}")
         logger.info(f"  Total games: {len(df)}")
     except Exception as e:
@@ -1278,6 +1355,200 @@ def save_checkpoint(
         save_games_parquet(results, checkpoint_path, details_map=details_map)
     except Exception as e:
         logger.error(f"Checkpoint save failed: {e}")
+
+
+def run(
+    input_path: str,
+    output_path: str,
+    details_path: Optional[str] = None,
+    rate_limit: float = 0.5,
+    max_retries: int = 3,
+    quiet: bool = False,
+    limit: int = 0,
+    save_raw: bool = False,
+) -> int:
+    """
+    Scrape tournament reports for codes from input_path, write to output_path.
+
+    Args:
+        input_path: Path to tournament codes file (one per line). Local or S3 URI.
+        output_path: Base path for outputs. Writes {output_path}_players.parquet and
+            {output_path}_games.parquet.
+        details_path: Optional path to tournament_details parquet for date inference.
+        rate_limit: Requests per second (0 = no limit, natural throughput).
+        max_retries: Retry passes for failed fetches.
+        quiet: Reduce log output.
+        limit: Process only first N codes (0 = all).
+        save_raw: If True, save concatenated raw HTML to raw/reports/chunk_{i}.html.gz.
+
+    Returns:
+        0 on success, 1 on failure.
+    """
+    if quiet:
+        logging.getLogger().setLevel(logging.WARNING)
+
+    base = output_path.rstrip("/")
+    players_path = base + "_players.parquet"
+    games_path = base + "_games.parquet"
+
+    try:
+        codes = _read_codes_from_path(input_path)
+    except Exception as e:
+        logger.error("Error reading codes from %s: %s", input_path, e)
+        return 1
+
+    if not codes:
+        logger.error("No tournament codes found in %s", input_path)
+        return 1
+
+    if limit > 0:
+        codes = codes[:limit]
+        logger.info("Limited to first %d tournaments", limit)
+
+    details_map: Dict[str, Tuple[Optional[str], Optional[str]]] = {}
+    if details_path:
+        try:
+            if _is_s3(details_path):
+                from s3_io import download_to_file
+
+                local_path = Path(tempfile.gettempdir()) / "details_chunk.parquet"
+                download_to_file(details_path, local_path)
+                df = pd.read_parquet(local_path)
+            else:
+                df = pd.read_parquet(details_path)
+            ec_col = "event_code" if "event_code" in df.columns else "id"
+            for _, row in df.iterrows():
+                ec = row.get(ec_col)
+                if pd.notna(ec) and str(ec):
+                    sd = parse_details_date_to_iso(str(row.get("start_date", "")))
+                    ed = parse_details_date_to_iso(str(row.get("end_date", "")))
+                    details_map[str(ec)] = (sd, ed)
+            logger.info(
+                "Loaded date bounds for %d tournaments from %s",
+                len(details_map),
+                details_path,
+            )
+        except Exception as e:
+            logger.warning("Could not load details for date inference: %s", e)
+
+    logger.info(
+        "Processing %d tournaments from %s -> %s",
+        len(codes),
+        input_path,
+        games_path,
+    )
+
+    session = requests.Session()
+    adapter = requests.adapters.HTTPAdapter(
+        pool_connections=1, pool_maxsize=1, max_retries=0
+    )
+    session.mount("http://", adapter)
+    session.mount("https://", adapter)
+
+    raw_base: Optional[str] = (
+        _raw_base_from_output_path(output_path) if save_raw else None
+    )
+    raw_accumulator: List[Tuple[str, bytes]] = []  # (code, html)
+
+    all_results: List[Dict] = []
+    success_count = 0
+    error_count = 0
+    current_codes = codes
+
+    pbar = None
+    if not quiet:
+        pbar = tqdm(
+            total=len(codes),
+            desc="Processing",
+            unit="tournament",
+            bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}]",
+        )
+
+    rate_limiter = RateLimiter(rate_limit) if rate_limit > 0 else None
+
+    start_time = time.time()
+
+    for pass_num in range(max_retries + 1):
+        if not current_codes:
+            break
+        if pass_num > 0:
+            delay = 3 * (2 ** (pass_num - 1))
+            logger.info(
+                "Retry pass %d: waiting %s before retrying %d tournaments",
+                pass_num,
+                format_duration(delay),
+                len(current_codes),
+            )
+            time.sleep(delay)
+
+        pass_failed = []
+        for code in current_codes:
+            if rate_limiter:
+                rate_limiter.wait()
+            report, error, _, raw_content = fetch_tournament_report(
+                code, session, return_raw=save_raw
+            )
+
+            result = {"tournament_code": code}
+            if report is None:
+                error_count += 1
+                result["success"] = False
+                result["error"] = error or "fetch failed"
+                error_lower = (error or "").lower()
+                network_error_patterns = [
+                    "eof",
+                    "connection reset",
+                    "connection aborted",
+                    "remotedisconnected",
+                    "remote end closed",
+                    "broken pipe",
+                ]
+                is_network_error = any(p in error_lower for p in network_error_patterns)
+                if (
+                    error
+                    and (is_network_error or "timeout" in error_lower)
+                    and pass_num < max_retries
+                ):
+                    pass_failed.append(code)
+            else:
+                success_count += 1
+                result["success"] = True
+                result.update(report)
+                if raw_base and raw_content:
+                    raw_accumulator.append((code, raw_content))
+
+            all_results.append(result)
+            if pbar:
+                pbar.update(1)
+                pbar.set_postfix({"✓": success_count, "✗": error_count})
+
+        current_codes = pass_failed
+
+    if pbar:
+        pbar.close()
+
+    if raw_base and raw_accumulator:
+        from raw_utils import build_concatenated_gzip
+
+        raw_path = raw_base + ".html.gz"
+        _write_to_path(raw_path, build_concatenated_gzip(raw_accumulator))
+        logger.info(
+            "Saved concatenated raw HTML (%d tournaments) to %s",
+            len(raw_accumulator),
+            raw_path,
+        )
+
+    save_players_parquet(all_results, players_path)
+    save_games_parquet(all_results, games_path, details_map=details_map)
+
+    elapsed = time.time() - start_time
+    logger.info(
+        "Done: %d success, %d errors in %s",
+        success_count,
+        error_count,
+        format_duration(elapsed),
+    )
+    return 0
 
 
 def main():
@@ -1644,7 +1915,7 @@ def main():
         pass_failed = []
 
         for tournament_code in current_tournaments:
-            report, error, num_attempts = fetch_tournament_report(
+            report, error, num_attempts, _ = fetch_tournament_report(
                 tournament_code,
                 session,
                 _attempt_log=attempt_log if args.verbose_errors else None,

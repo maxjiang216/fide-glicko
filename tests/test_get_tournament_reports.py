@@ -416,7 +416,7 @@ class TestFixtureBasedParsing:
         session = MagicMock()
         session.get.return_value = mock_response
 
-        report, error, _ = fetch_tournament_report("449502", session)
+        report, error, _, _ = fetch_tournament_report("449502", session)
 
         assert error is None
         assert report is not None
@@ -466,7 +466,7 @@ class TestFixtureBasedParsing:
         session = MagicMock()
         session.get.return_value = mock_response
 
-        report, error, _ = fetch_tournament_report("418871", session)
+        report, error, _, _ = fetch_tournament_report("418871", session)
 
         assert error is None
         assert report is not None
@@ -500,7 +500,7 @@ class TestFixtureBasedParsing:
         session = MagicMock()
         session.get.return_value = mock_response
 
-        report, error, _ = fetch_tournament_report("397341", session)
+        report, error, _, _ = fetch_tournament_report("397341", session)
 
         assert error is None
         assert report is not None
@@ -537,7 +537,7 @@ class TestFixtureBasedParsing:
         mock_session = MagicMock()
         mock_session.get.return_value = mock_response
 
-        report_fixture, error_fixture, _ = fetch_tournament_report(
+        report_fixture, error_fixture, _, _ = fetch_tournament_report(
             "449502", mock_session
         )
         assert error_fixture is None
@@ -545,7 +545,7 @@ class TestFixtureBasedParsing:
 
         # Fetch live from FIDE
         live_session = requests.Session()
-        report_live, error_live, _ = fetch_tournament_report("449502", live_session)
+        report_live, error_live, _, _ = fetch_tournament_report("449502", live_session)
 
         assert error_live is None, f"Live fetch failed: {error_live}"
         assert report_live is not None
@@ -563,7 +563,7 @@ class TestFixtureBasedParsing:
         Run with: pytest -m online
         """
         live_session = requests.Session()
-        report, error, _ = fetch_tournament_report("449502", live_session)
+        report, error, _, _ = fetch_tournament_report("449502", live_session)
 
         assert error is None, f"Fetch failed: {error}"
         assert report is not None

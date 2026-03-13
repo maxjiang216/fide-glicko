@@ -1,24 +1,26 @@
 #!/bin/bash
-# Build and deploy tournament details chunk Lambda to AWS.
+# Build and deploy tournament reports chunk Lambda to AWS.
 #
-# Scrapes tournament details for a list of IDs from an input path, outputs to S3/local.
+# Scrapes tournament reports for a list of codes from an input path, outputs
+# _players.parquet and _games.parquet to S3/local. Saves raw HTML to raw/reports
+# when save_raw=true.
 # Requires: pandas, pyarrow, requests, beautifulsoup4, tqdm (boto3 in runtime).
 #
 # Usage:
-#   ./infra/deploy_details_chunk_lambda.sh              # Create/update Lambda
-#   ./infra/deploy_details_chunk_lambda.sh --zip-only   # Just build the zip
+#   ./infra/deploy_reports_chunk_lambda.sh              # Create/update Lambda
+#   ./infra/deploy_reports_chunk_lambda.sh --zip-only   # Just build the zip
 
 set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-BUILD_DIR="$REPO_ROOT/build/lambda_details_chunk"
-ZIP_PATH="$REPO_ROOT/build/details_chunk_lambda.zip"
+BUILD_DIR="$REPO_ROOT/build/lambda_reports_chunk"
+ZIP_PATH="$REPO_ROOT/build/reports_chunk_lambda.zip"
 
-FUNCTION_NAME="${FUNCTION_NAME:-fide-glicko-details-chunk}"
+FUNCTION_NAME="${FUNCTION_NAME:-fide-glicko-reports-chunk}"
 RUNTIME="python3.12"
-HANDLER="handlers.details_chunk.lambda_handler"
+HANDLER="handlers.reports_chunk.lambda_handler"
 TIMEOUT=900
-# Scrape can process many tournaments; increase if OOM
+# Reports can process many tournaments; increase if OOM
 MEMORY=1024
 
 mkdir -p "$BUILD_DIR"
@@ -27,7 +29,7 @@ cd "$BUILD_DIR"
 
 # Copy handler and scraper code
 cp -r "$REPO_ROOT/handlers" .
-cp "$REPO_ROOT/src/scraper/get_tournament_details.py" .
+cp "$REPO_ROOT/src/scraper/get_tournament_reports.py" .
 cp "$REPO_ROOT/src/scraper/raw_utils.py" .
 cp "$REPO_ROOT/src/scraper/s3_io.py" .
 
@@ -41,7 +43,7 @@ fi
 # Zip
 zip -r "$ZIP_PATH" . -x "*.pyc" -x "__pycache__/*" -x "*__pycache__*"
 
-ZIP_SIZE_MB=$(stat -c%s "$ZIP_PATH" | awk '{printf "%.1f", $1/1024/1024}')
+ZIP_SIZE_MB=$(stat -c%s "$ZIP_PATH" 2>/dev/null | awk '{printf "%.1f", $1/1024/1024}' || echo "?")
 echo "Built $ZIP_PATH (${ZIP_SIZE_MB}MB)"
 
 if [[ "${1:-}" == "--zip-only" ]]; then
@@ -51,7 +53,7 @@ fi
 
 # Lambda direct upload limit is 50MB; use S3 for larger packages
 DEPLOY_BUCKET="${LAMBDA_DEPLOY_BUCKET:-fide-glicko}"
-DEPLOY_KEY="lambda-packages/details_chunk_$(date +%Y%m%d%H%M%S).zip"
+DEPLOY_KEY="lambda-packages/reports_chunk_$(date +%Y%m%d%H%M%S).zip"
 ZIP_SIZE_BYTES=$(stat -c%s "$ZIP_PATH")
 
 # Create or update Lambda
@@ -98,11 +100,11 @@ else
       --runtime "$RUNTIME" \
       --handler "$HANDLER" \
       --role "$LAMBDA_ROLE_ARN" \
-      --zip-file "fileb://$ZIP_PATH" \
       --timeout "$TIMEOUT" \
-      --memory-size "$MEMORY"
+      --memory-size "$MEMORY" \
+      --zip-file "fileb://$ZIP_PATH"
   fi
 fi
 
 echo "Done. Invoke with:"
-echo "  aws lambda invoke --function-name $FUNCTION_NAME --payload '{\"input_path\":\"s3://fide-glicko/data/tournament_ids/chunk_0.txt\",\"output_path\":\"s3://fide-glicko/data/tournament_details/2025_03_part_0\"}' out.json && cat out.json"
+echo "  aws lambda invoke --function-name $FUNCTION_NAME --payload '{\"run_type\":\"test\",\"chunk_index\":0}' out.json && cat out.json"

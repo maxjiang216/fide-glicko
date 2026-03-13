@@ -1,5 +1,5 @@
 """
-Lambda handler for tournament details chunk scraper.
+Lambda handler for tournament reports chunk scraper.
 
 Event shape:
 {
@@ -8,44 +8,32 @@ Event shape:
     "chunk_index": 0,
     "bucket": "fide-glicko",
     "override": false,
-    "save_raw": false
+    "save_raw": false,
+    "details_path": null
 }
 
 - run_type: prod | custom | test (default: custom)
 - run_name: Required for prod/custom. Ignored for test.
 - chunk_index: Chunk index (0-based). Paths inferred as
   {base}/data/tournament_id_chunks/chunk_{i}.txt and
-  {base}/data/tournament_details_chunks/chunk_{i}.
+  {base}/data/tournament_reports_chunks/chunk_{i}.
 - bucket: S3 bucket (default: fide-glicko)
 - override: If true, overwrite existing output (default: false)
-- save_raw: If true, save concatenated raw HTML to raw/details/chunk_{i}.html.gz (default: false)
+- save_raw: If true, save concatenated raw HTML to raw/reports/chunk_{i}.html.gz (default: false)
+- details_path: Optional S3 URI to details chunk parquet for date inference.
 """
 
 import logging
 
 from .lambda_logging import configure
 from s3_io import build_s3_uri_for_run, output_exists
-from get_tournament_details import run
+from get_tournament_reports import run
 
 logger = logging.getLogger(__name__)
 
 
-def _derive_sample_and_reports_paths(output_path: str) -> tuple[str | None, str | None]:
-    """
-    Derive output_sample_path and output_reports_base from output_path.
-    output_path should contain /data/ (e.g. .../data/tournament_details_chunks/chunk_0).
-    Returns (sample_path, reports_base) or (None, None) if /data/ not present.
-    """
-    if "/data/" not in output_path:
-        return None, None
-    sample_base = output_path.replace("/data/", "/sample/", 1)
-    reports_base = output_path.replace("/data/", "/reports/", 1)
-    output_sample_path = sample_base + "_sample.json"
-    return output_sample_path, reports_base
-
-
 def lambda_handler(event: dict, context) -> dict:
-    """Lambda entry point for tournament details chunk scraper."""
+    """Lambda entry point for tournament reports chunk scraper."""
     configure()
     run_type = event.get("run_type", "custom")
     run_name = event.get("run_name")
@@ -53,6 +41,7 @@ def lambda_handler(event: dict, context) -> dict:
     bucket = event.get("bucket", "fide-glicko")
     override = event.get("override", False)
     save_raw = event.get("save_raw", False)
+    details_path = event.get("details_path")
 
     if run_type not in ("prod", "custom", "test"):
         return {
@@ -86,25 +75,31 @@ def lambda_handler(event: dict, context) -> dict:
         run_type,
         run_name,
         "data",
-        "tournament_details_chunks",
+        "tournament_reports_chunks",
         f"chunk_{chunk_index}",
     )
 
-    output_sample_path, output_reports_base = _derive_sample_and_reports_paths(
-        output_path
-    )
-
-    parquet_uri = output_path + ".parquet"
-    if not override and output_exists(parquet_uri):
+    games_uri = output_path + "_games.parquet"
+    if not override and output_exists(games_uri):
         return {
             "statusCode": 409,
             "success": False,
             "error": "Output already exists; pass override=true to replace",
-            "output_path": parquet_uri,
+            "output_path": games_uri,
         }
 
+    if details_path is None:
+        details_path = build_s3_uri_for_run(
+            bucket,
+            run_type,
+            run_name,
+            "data",
+            "tournament_details_chunks",
+            f"chunk_{chunk_index}.parquet",
+        )
+
     logger.info(
-        "Starting tournament details scrape: input=%s output=%s",
+        "Starting tournament reports scrape: input=%s output=%s",
         input_path,
         output_path,
     )
@@ -112,17 +107,15 @@ def lambda_handler(event: dict, context) -> dict:
     exit_code = run(
         input_path=input_path,
         output_path=output_path,
-        rate_limit=0.5,
+        details_path=details_path,
+        rate_limit=0,
         max_retries=3,
-        checkpoint=0,
         quiet=False,
-        output_sample_path=output_sample_path,
-        output_reports_base=output_reports_base,
         save_raw=save_raw,
     )
 
     if exit_code != 0:
-        logger.error("Tournament details scrape failed with exit code %d", exit_code)
+        logger.error("Tournament reports scrape failed with exit code %d", exit_code)
         return {
             "statusCode": 500,
             "success": False,
@@ -131,7 +124,7 @@ def lambda_handler(event: dict, context) -> dict:
             "error": "Scrape failed",
         }
 
-    logger.info("Tournament details scrape completed successfully")
+    logger.info("Tournament reports scrape completed successfully")
     return {
         "statusCode": 200,
         "success": True,
