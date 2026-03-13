@@ -356,14 +356,14 @@ def main() -> int:
 
     # Paths
     if args.run_type:
-        from s3_io import build_local_path_for_run
+        from s3_io import build_local_path_for_run, resolve_latest_players_list_local
         players_path = (
             Path(args.players_path)
             if args.players_path
-            else base / build_local_path_for_run(
-                args.local_root, args.run_type, run_name, "data", "players_list.parquet"
-            )
+            else resolve_latest_players_list_local(base / args.local_root)
         )
+        if players_path is None:
+            players_path = base / "src" / "data" / "players_list.parquet"
         details_path = base / build_local_path_for_run(
             args.local_root, args.run_type, run_name, "data", "tournament_details.parquet"
         )

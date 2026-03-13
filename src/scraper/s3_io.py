@@ -5,12 +5,21 @@ Used by scrapers when running in Lambda or with --output s3://...
 """
 
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
 S3_PREFIX = "s3://"
 
 VALID_RUN_TYPES = ("prod", "custom", "test")
+
+# Shared paths for federations and player list (all run types share these)
+FEDERATIONS_DATA_PREFIX = "federations/data"
+PLAYER_LISTS_DATA_PREFIX = "player_lists/data"
+PLAYER_LISTS_RAW_PREFIX = "player_lists/raw"
+PLAYER_LISTS_SAMPLE_PREFIX = "player_lists/sample"
+PLAYER_LISTS_REPORTS_PREFIX = "player_lists/reports"
+STALE_DAYS = 14  # Only re-fetch if latest is older than this
 
 
 def is_s3_path(path: str) -> bool:
@@ -143,6 +152,116 @@ def build_local_path_for_run(
     base = build_run_base(run_type, run_name)
     parts = [base, subfolder] + list(path_parts)
     return Path(local_root) / "/".join(parts)
+
+
+def list_s3_objects(bucket: str, prefix: str) -> list[tuple[str, datetime]]:
+    """List objects under prefix, return [(key, last_modified), ...]. Keys are full keys."""
+    import boto3
+
+    s3 = boto3.client("s3")
+    paginator = s3.get_paginator("list_objects_v2")
+    results = []
+    for page in paginator.paginate(Bucket=bucket, Prefix=prefix):
+        for obj in page.get("Contents", []):
+            key = obj["Key"]
+            lm = obj.get("LastModified")
+            if lm:
+                results.append((key, lm))
+    return results
+
+
+def get_latest_in_s3_prefix(
+    bucket: str, prefix: str
+) -> tuple[Optional[str], Optional[datetime]]:
+    """
+    Get the latest object in prefix by key name (assumes timestamp format in filename).
+    Returns (s3_uri, last_modified) or (None, None) if empty.
+    """
+    objects = list_s3_objects(bucket, prefix)
+    if not objects:
+        return None, None
+    # Sort by key descending (latest timestamp first)
+    objects.sort(key=lambda x: x[0], reverse=True)
+    key, last_modified = objects[0]
+    return f"{S3_PREFIX}{bucket}/{key}", last_modified
+
+
+def is_stale(last_modified: datetime | float) -> bool:
+    """Return True if last_modified is more than STALE_DAYS ago."""
+    if isinstance(last_modified, (int, float)):
+        dt = datetime.fromtimestamp(last_modified, tz=timezone.utc)
+    elif last_modified.tzinfo is None:
+        dt = last_modified.replace(tzinfo=timezone.utc)
+    else:
+        dt = last_modified
+    age = datetime.now(timezone.utc) - dt
+    return age.days >= STALE_DAYS
+
+
+def build_federations_data_uri(bucket: str, timestamp: str) -> str:
+    """Build s3://bucket/federations/data/federations_{timestamp}.csv."""
+    return f"{S3_PREFIX}{bucket}/{FEDERATIONS_DATA_PREFIX}/federations_{timestamp}.csv"
+
+
+def build_player_lists_data_uri(bucket: str, timestamp: str) -> str:
+    """Build s3://bucket/player_lists/data/player_list_{timestamp}.parquet."""
+    return f"{S3_PREFIX}{bucket}/{PLAYER_LISTS_DATA_PREFIX}/player_list_{timestamp}.parquet"
+
+
+def build_player_lists_raw_uri(bucket: str, timestamp: str) -> str:
+    """Build s3://bucket/player_lists/raw/player_list_{timestamp}.xml.gz."""
+    return (
+        f"{S3_PREFIX}{bucket}/{PLAYER_LISTS_RAW_PREFIX}/player_list_{timestamp}.xml.gz"
+    )
+
+
+def resolve_latest_federations_uri(bucket: str) -> Optional[str]:
+    """Return URI of latest federations file, or None if none exist."""
+    uri, _ = get_latest_in_s3_prefix(bucket, FEDERATIONS_DATA_PREFIX + "/")
+    return uri
+
+
+def resolve_latest_players_list_uri(bucket: str) -> Optional[str]:
+    """Return URI of latest players list parquet, or None if none exist."""
+    uri, _ = get_latest_in_s3_prefix(bucket, PLAYER_LISTS_DATA_PREFIX + "/")
+    return uri
+
+
+def resolve_latest_federations_local(local_root: str | Path) -> Optional[Path]:
+    """Return path of latest federations CSV for local mode, or None."""
+    path, _ = get_latest_in_local_prefix(local_root, FEDERATIONS_DATA_PREFIX)
+    return path
+
+
+def resolve_latest_players_list_local(local_root: str | Path) -> Optional[Path]:
+    """Return path of latest players list parquet for local mode, or None."""
+    path, _ = get_latest_in_local_prefix(local_root, PLAYER_LISTS_DATA_PREFIX)
+    return path
+
+
+def list_local_shared_files(
+    local_root: str | Path, prefix: str
+) -> list[tuple[Path, float]]:
+    """List files under local_root/prefix, return [(path, mtime), ...]."""
+    base = Path(local_root) / prefix
+    if not base.exists():
+        return []
+    results = []
+    for p in base.iterdir():
+        if p.is_file():
+            results.append((p, p.stat().st_mtime))
+    return results
+
+
+def get_latest_in_local_prefix(
+    local_root: str | Path, prefix: str
+) -> tuple[Optional[Path], Optional[float]]:
+    """Get latest file by name (timestamp) in prefix. Returns (path, mtime) or (None, None)."""
+    files = list_local_shared_files(local_root, prefix)
+    if not files:
+        return None, None
+    files.sort(key=lambda x: x[0].name, reverse=True)
+    return files[0][0], files[0][1]
 
 
 def write_run_metadata(

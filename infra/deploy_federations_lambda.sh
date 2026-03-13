@@ -78,4 +78,4 @@ else
 fi
 
 echo "Done. Invoke with:"
-echo "  aws lambda invoke --function-name $FUNCTION_NAME --payload '{\"bucket\":\"fide-glicko\",\"output_prefix\":\"data\"}' out.json && cat out.json"
+echo "  aws lambda invoke --function-name $FUNCTION_NAME --payload '{\"bucket\":\"fide-glicko\",\"override\":false}' out.json && cat out.json"

@@ -20,10 +20,18 @@ import requests
 from bs4 import BeautifulSoup
 
 from s3_io import (
+    build_federations_data_uri,
     build_local_path_for_run,
+    download_to_file,
+    get_latest_in_local_prefix,
+    get_latest_in_s3_prefix,
     is_s3_path,
     output_exists,
+    parse_s3_uri,
     write_output,
+    FEDERATIONS_DATA_PREFIX,
+    STALE_DAYS,
+    is_stale,
 )
 
 URL = "https://ratings.fide.com/rated_tournaments.phtml"
@@ -117,6 +125,14 @@ def _federations_to_csv(federations: List[Dict[str, str]]) -> str:
     return buf.getvalue()
 
 
+def _parse_federations_from_csv(content: str) -> set[tuple[str, str]]:
+    """Parse CSV content into set of (code, name) for order-independent comparison."""
+    reader = csv.DictReader(io.StringIO(content))
+    return {
+        (row["code"].strip(), row["name"].strip()) for row in reader if row.get("code")
+    }
+
+
 def _graceful_shutdown(signum: int, frame) -> None:
     """Save partial results on SIGINT/SIGTERM."""
     global _shutdown_state
@@ -133,6 +149,113 @@ def _graceful_shutdown(signum: int, frame) -> None:
     else:
         logger.info("No partial results to save")
     sys.exit(130 if signum == 2 else 0)  # 130 = SIGINT
+
+
+def run_shared(
+    bucket: Optional[str] = None,
+    local_root: Optional[str | Path] = None,
+    override: bool = False,
+    quiet: bool = False,
+) -> str:
+    """
+    Fetch federations and write to shared path (federations/data/federations_{timestamp}.csv).
+    Skips fetch if latest exists and is < 2 weeks old (unless override).
+    For federations, only writes if content actually changed (order-independent compare).
+
+    Args:
+        bucket: S3 bucket (uses shared path). If None, uses local_root.
+        local_root: Local root for output (e.g. 'data'). Used when bucket is None.
+        override: If True, skip list check and always fetch + write.
+        quiet: Reduce log output.
+
+    Returns:
+        URI (s3://...) or local path str of the file used.
+    """
+    from datetime import datetime, timezone
+
+    if quiet:
+        logging.getLogger().setLevel(logging.WARNING)
+
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+    use_s3 = bucket is not None
+
+    if use_s3:
+        output_uri = build_federations_data_uri(bucket, timestamp)
+    else:
+        base = Path(local_root or "data") / FEDERATIONS_DATA_PREFIX
+        base.mkdir(parents=True, exist_ok=True)
+        output_path = base / f"federations_{timestamp}.csv"
+
+    if not override:
+        if use_s3:
+            latest_uri, last_modified = get_latest_in_s3_prefix(
+                bucket, FEDERATIONS_DATA_PREFIX + "/"
+            )
+            if latest_uri and last_modified and not is_stale(last_modified):
+                logger.info("Latest federations < 2 weeks old, reusing %s", latest_uri)
+                return latest_uri
+        else:
+            latest_path, mtime = get_latest_in_local_prefix(
+                local_root or "data", FEDERATIONS_DATA_PREFIX
+            )
+            if latest_path and mtime is not None and not is_stale(mtime):
+                logger.info("Latest federations < 2 weeks old, reusing %s", latest_path)
+                return str(latest_path)
+
+    logger.info("Fetching federations list from %s...", URL)
+    try:
+        federations = get_federations_with_retries()
+    except Exception as e:
+        logger.error("Error fetching federations: %s", e)
+        raise RuntimeError(f"Failed to fetch federations: {e}") from e
+
+    if not federations:
+        raise RuntimeError("No federations retrieved")
+
+    new_content = _federations_to_csv(federations)
+
+    # Content diff: only write if different (skip when override - we always write)
+    if not override:
+        new_set = _parse_federations_from_csv(new_content)
+        if use_s3:
+            latest_uri, _ = get_latest_in_s3_prefix(
+                bucket, FEDERATIONS_DATA_PREFIX + "/"
+            )
+            if latest_uri:
+                try:
+                    import boto3
+
+                    b, k = parse_s3_uri(latest_uri)
+                    s3 = boto3.client("s3")
+                    obj = s3.get_object(Bucket=b, Key=k)
+                    existing = obj["Body"].read().decode("utf-8")
+                    existing_set = _parse_federations_from_csv(existing)
+                    if new_set == existing_set:
+                        logger.info("Federations unchanged, reusing %s", latest_uri)
+                        return latest_uri
+                except Exception as e:
+                    logger.warning("Could not compare with latest: %s", e)
+        else:
+            latest_path, _ = get_latest_in_local_prefix(
+                local_root or "data", FEDERATIONS_DATA_PREFIX
+            )
+            if latest_path and latest_path.exists():
+                existing_set = _parse_federations_from_csv(
+                    latest_path.read_text(encoding="utf-8")
+                )
+                if new_set == existing_set:
+                    logger.info("Federations unchanged, reusing %s", latest_path)
+                    return str(latest_path)
+
+    # Write new
+    if use_s3:
+        write_output(new_content.encode("utf-8"), output_uri)
+        logger.info("Saved %d federations to %s", len(federations), output_uri)
+        return output_uri
+    else:
+        output_path.write_text(new_content, encoding="utf-8")
+        logger.info("Saved %d federations to %s", len(federations), output_path)
+        return str(output_path)
 
 
 def run(
@@ -257,28 +380,28 @@ def main() -> int:
 
     args = parser.parse_args()
 
-    if args.output is not None:
-        output_path = args.output
+    if args.output is not None and is_s3_path(args.output):
+        bucket, _ = parse_s3_uri(args.output)
+        run_shared(bucket=bucket, override=args.override, quiet=args.quiet)
+        return 0
     elif args.run_type:
         if args.run_type in ("prod", "custom") and not args.run_name:
             logger.error("--run-name required when --run-type is prod or custom")
             return 1
-        path = build_local_path_for_run(
-            args.local_root, args.run_type, args.run_name, "data", "federations.csv"
-        )
-        output_path = str(path)
-        path.parent.mkdir(parents=True, exist_ok=True)
+        repo_root = Path(__file__).parent.parent.parent
+        local_root = repo_root / (args.local_root or "data")
+        run_shared(local_root=local_root, override=args.override, quiet=args.quiet)
+        return 0
     else:
         repo_root = Path(__file__).parent.parent.parent
         output_dir = repo_root / args.directory
         output_dir.mkdir(parents=True, exist_ok=True)
         output_path = str(output_dir / args.filename)
-
-    return run(
-        output_path=output_path,
-        override=args.override,
-        quiet=args.quiet,
-    )
+        return run(
+            output_path=output_path,
+            override=args.override,
+            quiet=args.quiet,
+        )
 
 
 if __name__ == "__main__":
