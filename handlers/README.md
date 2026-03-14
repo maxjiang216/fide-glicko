@@ -103,17 +103,12 @@ All Lambdas accept **run_type**, **run_name**, **bucket**, **override** where ap
 {
   "run_type": "prod",
   "run_name": "2024-01",
-  "bucket": "fide-glicko",
-  "players_uri": null,
-  "details_uri": null,
-  "reports_uri": null
+  "bucket": "fide-glicko"
 }
 ```
 - **run_type**, **run_name**: Required (as above).
 - **bucket**: default fide-glicko
-- **players_uri**: Optional. Defaults to latest in `{bucket}/player_lists/data/`.
-- **details_uri**: Optional. Defaults to `{base}/data/tournament_details.parquet`.
-- **reports_uri**: Optional. Defaults to `{base}/data/tournament_reports_games.parquet`.
+- All paths inferred: details `{base}/data/tournament_details.parquet`, reports `{base}/data/tournament_reports_games.parquet`, players latest in `{bucket}/player_lists/data/`.
 - Inputs: Merged details, reports_games, and latest player list (run merge_chunks first).
 - Output: `{base}/reports/validation_report.json`
 - Returns: `report_uri`, `has_issues`, `player_list_vs_reports`, `details_vs_reports`
