@@ -1,0 +1,267 @@
+{
+  "Comment": "FIDE scraping pipeline: federations, tournaments, player_list, split_ids, Map(details+reports per chunk), merge, validate",
+  "StartAt": "Federations",
+  "States": {
+    "Federations": {
+      "Type": "Task",
+      "Resource": "${FederationsFunctionArn}",
+      "Parameters": {
+        "bucket.$": "$.bucket",
+        "override.$": "$.override"
+      },
+      "ResultPath": "$.federations",
+      "Retry": [
+        {
+          "ErrorEquals": ["Lambda.ServiceException", "Lambda.TooManyRequestsException"],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.error",
+          "Next": "PipelineFailed"
+        }
+      ],
+      "Next": "ParallelData"
+    },
+
+    "ParallelData": {
+      "Type": "Parallel",
+      "Branches": [
+        {
+          "StartAt": "Tournaments",
+          "States": {
+            "Tournaments": {
+              "Type": "Task",
+              "Resource": "${TournamentsFunctionArn}",
+              "Parameters": {
+                "year.$": "$.year",
+                "month.$": "$.month",
+                "run_type.$": "$.run_type",
+                "run_name.$": "$.run_name",
+                "bucket.$": "$.bucket",
+                "override.$": "$.override"
+              },
+              "End": true
+            }
+          }
+        },
+        {
+          "StartAt": "PlayerList",
+          "States": {
+            "PlayerList": {
+              "Type": "Task",
+              "Resource": "${PlayerListFunctionArn}",
+              "Parameters": {
+                "bucket.$": "$.bucket",
+                "override.$": "$.override"
+              },
+              "End": true
+            }
+          }
+        }
+      ],
+      "ResultPath": "$.parallel_data",
+      "Retry": [
+        {
+          "ErrorEquals": ["Lambda.ServiceException", "Lambda.TooManyRequestsException"],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.error",
+          "Next": "PipelineFailed"
+        }
+      ],
+      "Next": "SplitIds"
+    },
+
+    "SplitIds": {
+      "Type": "Task",
+      "Resource": "${SplitIdsFunctionArn}",
+      "Parameters": {
+        "run_type.$": "$.run_type",
+        "run_name.$": "$.run_name",
+        "bucket.$": "$.bucket",
+        "override.$": "$.override"
+      },
+      "ResultPath": "$.split_ids",
+      "Retry": [
+        {
+          "ErrorEquals": ["Lambda.ServiceException", "Lambda.TooManyRequestsException"],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.error",
+          "Next": "PipelineFailed"
+        }
+      ],
+      "Next": "MapDetailsAndReports"
+    },
+
+    "MapDetailsAndReports": {
+      "Type": "Map",
+      "ItemsPath": "$.split_ids.chunks",
+      "MaxConcurrency": 40,
+      "ItemSelector": {
+        "run_type.$": "$$.Execution.Input.run_type",
+        "run_name.$": "$$.Execution.Input.run_name",
+        "chunk_index.$": "$$.Map.Item.Value.chunk_index",
+        "bucket.$": "$$.Execution.Input.bucket",
+        "override.$": "$$.Execution.Input.override"
+      },
+      "Iterator": {
+        "StartAt": "DetailsChunk",
+        "States": {
+          "DetailsChunk": {
+            "Type": "Task",
+            "Resource": "${DetailsChunkFunctionArn}",
+            "Parameters": {
+              "run_type.$": "$.run_type",
+              "run_name.$": "$.run_name",
+              "chunk_index.$": "$.chunk_index",
+              "bucket.$": "$.bucket",
+              "override.$": "$.override"
+            },
+            "Retry": [
+              {
+                "ErrorEquals": ["Lambda.ServiceException", "Lambda.TooManyRequestsException"],
+                "IntervalSeconds": 5,
+                "MaxAttempts": 3,
+                "BackoffRate": 2
+              }
+            ],
+            "Catch": [
+              {
+                "ErrorEquals": ["States.ALL"],
+                "ResultPath": "$.error",
+                "Next": "ChunkFailed"
+              }
+            ],
+            "Next": "ReportsChunk"
+          },
+          "ReportsChunk": {
+            "Type": "Task",
+            "Resource": "${ReportsChunkFunctionArn}",
+            "Parameters": {
+              "run_type.$": "$.run_type",
+              "run_name.$": "$.run_name",
+              "chunk_index.$": "$.chunk_index",
+              "bucket.$": "$.bucket",
+              "override.$": "$.override",
+              "save_raw": false
+            },
+            "Retry": [
+              {
+                "ErrorEquals": ["Lambda.ServiceException", "Lambda.TooManyRequestsException"],
+                "IntervalSeconds": 5,
+                "MaxAttempts": 3,
+                "BackoffRate": 2
+              }
+            ],
+            "End": true
+          },
+          "ChunkFailed": {
+            "Type": "Pass",
+            "Result": {"error": "Chunk processing failed"},
+            "End": true
+          }
+        }
+      },
+      "ResultPath": "$.map_results",
+      "Retry": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "IntervalSeconds": 10,
+          "MaxAttempts": 1,
+          "BackoffRate": 1
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.error",
+          "Next": "PipelineFailed"
+        }
+      ],
+      "Next": "MergeChunks"
+    },
+
+    "MergeChunks": {
+      "Type": "Task",
+      "Resource": "${MergeChunksFunctionArn}",
+      "Parameters": {
+        "run_type.$": "$.run_type",
+        "run_name.$": "$.run_name",
+        "bucket.$": "$.bucket",
+        "override.$": "$.override"
+      },
+      "ResultPath": "$.merge",
+      "Retry": [
+        {
+          "ErrorEquals": ["Lambda.ServiceException", "Lambda.TooManyRequestsException"],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.error",
+          "Next": "PipelineFailed"
+        }
+      ],
+      "Next": "Validate"
+    },
+
+    "Validate": {
+      "Type": "Task",
+      "Resource": "${ValidateFunctionArn}",
+      "Parameters": {
+        "run_type.$": "$.run_type",
+        "run_name.$": "$.run_name",
+        "bucket.$": "$.bucket"
+      },
+      "ResultPath": "$.validate",
+      "Retry": [
+        {
+          "ErrorEquals": ["Lambda.ServiceException", "Lambda.TooManyRequestsException"],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.error",
+          "Next": "PipelineFailed"
+        }
+      ],
+      "Next": "Success"
+    },
+
+    "Success": {
+      "Type": "Succeed"
+    },
+
+    "PipelineFailed": {
+      "Type": "Fail",
+      "Error": "PipelineFailed",
+      "Cause": "FIDE pipeline execution failed. Check state output for details."
+    }
+  }
+}

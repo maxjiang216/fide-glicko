@@ -1,112 +1,78 @@
 # AWS Infrastructure
 
+Infrastructure is defined in `template.yaml` (AWS SAM) and deployed via GitHub Actions or `sam deploy`.
+
+**Packaging:** 3 functions (federations, tournaments, split_ids) use ZIP with minimal deps; 5 data-heavy functions share one Docker image (pandas, pyarrow). This keeps builds fast and avoids Lambda's 250 MB zip limit.
+
 ## Handler separation
 
-The Lambda entry point is in `handlers/federations.py` — a thin wrapper around the core scraper. This keeps:
+Lambda entry points live in `handlers/` — thin wrappers around core scrapers in `src/scraper/`:
 
-- **handlers/federations.py**: Lambda concerns (event parsing, S3 path building, response format)
-- **src/scraper/get_federations.py**: Scraping logic (unchanged when run locally)
-
-The handler imports and calls `run()`; it does not shell out to the script. Same pattern for future Lambdas (tournaments, details, etc.).
+- **handlers/*.py**: Event parsing, S3 paths, response format
+- **src/scraper/*.py**: Scraping logic (shared with local execution)
 
 ---
 
-## Federations Lambda
+## Deploy
 
-### Deploy from GitHub (recommended)
+### From GitHub (recommended)
 
-The workflow `.github/workflows/deploy-federations-lambda.yml` deploys on push to main when federations-related files change.
+The workflow `.github/workflows/deploy-sam.yml` deploys on push to main when `template.yaml`, handlers, or `src/scraper` change.
 
-**OIDC setup (no stored credentials):**
+**OIDC setup:**
 
 1. **IAM → Identity providers → Add provider**
    - Provider URL: `https://token.actions.githubusercontent.com`
    - Audience: `sts.amazonaws.com`
 
-2. **Create role** for GitHub Actions with trust policy:
-   ```json
-   {
-     "Version": "2012-10-17",
-     "Statement": [{
-       "Effect": "Allow",
-       "Principal": {
-         "Federated": "arn:aws:iam::YOUR_ACCOUNT:oidc-provider/token.actions.githubusercontent.com"
-       },
-       "Action": "sts:AssumeRoleWithWebIdentity",
-       "Condition": {
-         "StringEquals": { "token.actions.githubusercontent.com:aud": "sts.amazonaws.com" },
-         "StringLike": { "token.actions.githubusercontent.com:sub": "repo:YOUR_ORG/fide-glicko:*" }
-       }
-     }]
-   }
-   ```
-   Attach policies: `AWSLambda_FullAccess` (or scoped: `lambda:UpdateFunctionCode`, `lambda:GetFunction`, `lambda:CreateFunction`), `iam:PassRole`.
+2. **Create role** for GitHub Actions with trust policy for `repo:YOUR_ORG/fide-glicko:*`, then attach permissions for:
+   - CloudFormation (create/update stack)
+   - S3 (deploy artifacts, must include fide-glicko or your deploy bucket)
+   - Lambda (create/update functions)
+   - IAM (create roles for Lambdas and Step Function)
+   - Step Functions (create/update state machine)
 
-3. **GitHub repo → Settings → Secrets → Actions**: Add `AWS_ROLE_ARN` = the role ARN.
+3. **GitHub → Settings → Secrets**: Add `AWS_ROLE_ARN` = the role ARN.
 
-4. **For first-time Lambda create**: Add `LAMBDA_ROLE_ARN` (execution role for the Lambda; needs S3 + CloudWatch).
+4. **GitHub → Settings → Variables** (optional): `AWS_REGION` = `us-east-1` (or your region).
 
-**Access keys (simpler, less secure):** Add secrets `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`. Edit the workflow: change the Configure step to use `aws-access-key-id` and `aws-secret-access-key` instead of `role-to-assume`. See [configure-aws-credentials](https://github.com/aws-actions/configure-aws-credentials).
+**Manual run:** Actions → Deploy SAM → Run workflow → set "Deploy to AWS" to true.
+
+### Manual (local)
+
+```bash
+# Prerequisites: AWS CLI configured, SAM CLI installed
+pip install aws-sam-cli  # or: brew install aws-sam-cli
+
+bash scripts/prepare_functions.sh   # ZIP functions only (data functions use Docker image)
+sam build --cached                  # --cached skips unchanged functions
+sam deploy
+# Or with prompts: sam deploy --guided  # first time only
+```
+
+### Migration from bash deploy scripts
+
+If you previously deployed with the old shell scripts, the Lambdas and Step Function were created outside CloudFormation. To adopt SAM:
+
+1. Delete the existing Step Function state machine (or it will conflict).
+2. Delete the existing Lambdas (they use the same names the stack will create).
+3. Ensure the S3 bucket `fide-glicko` exists.
+4. Run `sam deploy`.
 
 ---
 
-### Manual deploy
-```bash
-# 1. Create IAM role (one-time)
-# In AWS Console: IAM → Roles → Create role
-#   - Trusted entity: AWS service → Lambda
-#   - Attach policies: AWSLambdaBasicExecutionRole, AmazonS3FullAccess
-#     (or create custom policy scoped to fide-glicko bucket)
-#   - Name: fide-glicko-lambda-role
-# Copy the role ARN (e.g. arn:aws:iam::123456789012:role/fide-glicko-lambda-role)
+## Stack contents
 
-# 2. Deploy
-export LAMBDA_ROLE_ARN="arn:aws:iam::YOUR_ACCOUNT:role/fide-glicko-lambda-role"
-./infra/deploy_federations_lambda.sh
+- **8 Lambda functions**: federations, tournaments, player_list, split_ids, details_chunk, reports_chunk, merge_chunks, validate
+- **1 Step Functions state machine**: fide-glicko-pipeline
 
-# 3. Invoke (production - writes to data/)
-aws lambda invoke --function-name fide-glicko-federations \
-  --payload '{"bucket":"fide-glicko","output_prefix":"data"}' \
-  out.json && cat out.json
-
-# 4. Dev run (isolated prefix)
-aws lambda invoke --function-name fide-glicko-federations \
-  --payload '{"bucket":"fide-glicko","output_prefix":"runs/dev-20250308","override":true}' \
-  out.json && cat out.json
-```
-
-**Logs:** CloudWatch Logs → Log groups → `/aws/lambda/fide-glicko-federations`
-
----
-
-## Player List Lambda
-
-Same OIDC/secrets as federations. Deploy:
-
-```bash
-./infra/deploy_player_list_lambda.sh
-```
-
-Invoke (writes to data/, uses federations.csv for report if present):
-
-```bash
-aws lambda invoke --function-name fide-glicko-player-list \
-  --payload '{"bucket":"fide-glicko","output_prefix":"data"}' \
-  out.json && cat out.json
-```
-
-- **Timeout:** 5 min (downloads ~45MB from FIDE)
-- **Memory:** 1024 MB
-- **Outputs:** players_list.parquet, raw/players_list.xml.gz, players_list_sample.json, players_list_report.json
-- **Deploy note:** Package (~70MB) exceeds Lambda's 50MB direct upload limit; deploy script uploads to S3 first (`s3://fide-glicko/lambda-packages/`).
+All Lambdas share the same code package (handlers + `src/scraper`). The Step Function orchestrates the full scraping flow. See [step-function/README.md](step-function/README.md) for pipeline details and run instructions.
 
 ---
 
 ## S3 Bucket Structure
 
-The `fide-glicko` bucket stores scraped data and run artifacts.
-
-## Layout
+The `fide-glicko` bucket stores scraped data. Layout:
 
 ```
 s3://fide-glicko/
@@ -131,24 +97,14 @@ s3://fide-glicko/
         └── ...
 ```
 
-## When to use each
-
-- **`data/`** – Scheduled monthly production runs. Single source of truth. Use `output_prefix: "data"` in Lambda events.
-- **`runs/{run_id}/`** – Development, testing, historical backfills, new versions. Use `output_prefix: "runs/dev-1736..."` or similar. Run ID can be a timestamp (`dev-20250308-143022`) or execution ID from Step Functions.
+- **`data/`** – Scheduled production runs. Use `run_type: prod`, `run_name: "2024-01"`, etc.
+- **`runs/{run_id}/`** – Dev, test, backfills. Use `run_type: custom` or `test`.
 
 ## Logs
 
-Lambda logs (stdout/stderr) go to **CloudWatch Logs** under `/aws/lambda/<function-name>`. All handlers call `lambda_logging.configure()` to ensure output flushes promptly (important when Lambda times out).
+Lambda logs go to **CloudWatch Logs** under `/aws/lambda/<function-name>`.
 
-**CloudWatch Logs cost** (typical for this project):
-
-| Item | Price | Rough usage |
-|------|-------|-------------|
-| Ingestion | $0.50/GB | ~1–50 KB per invocation → **~\$0.0025/month** for 100 runs |
-| Storage | $0.03/GB-month | Negligible at a few MB |
-| **Total** | | **~ pennies per month** |
-
-Free tier: 5 GB ingestion, 5 GB storage/month. For monthly pipeline runs and occasional dev invocations, cost is negligible.
+**CloudWatch Logs cost** (typical for this project): ~pennies per month for monthly pipeline runs.
 
 ### Raw storage cost (when save_raw enabled)
 
@@ -158,5 +114,3 @@ Free tier: 5 GB ingestion, 5 GB storage/month. For monthly pipeline runs and occ
 | tournaments (208 federations) | ~124 KB | negligible |
 | details (75 chunks × 225) | ~150 MB | ~$0.003 |
 | **Total raw** | ~192 MB | **~$0.004** |
-
-Glacier Instant Retrieval would reduce storage by ~6× (~$0.0007/month).

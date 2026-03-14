@@ -1,0 +1,83 @@
+# Deploy FIDE Glicko stack via SAM (Lambdas + Step Function).
+#
+# Replaces individual Lambda deploy workflows. Single declarative deploy.
+#
+# Replaces individual Lambda deploy workflows.
+# Ensure AWS_ROLE_ARN has: cloudformation:*, s3:*, lambda:*, iam:*, states:*
+#
+name: Deploy SAM
+
+on:
+  push:
+    branches: [main, master]
+    paths:
+      - "template.yaml"
+      - "samconfig.toml"
+      - "requirements.txt"
+      - "handlers/**"
+      - "src/scraper/**"
+      - "infra/step-function/**"
+      - "docker/**"
+      - "scripts/**"
+      - ".github/workflows/deploy-sam.yml"
+  pull_request:
+    paths:
+      - "template.yaml"
+      - "samconfig.toml"
+      - "requirements.txt"
+      - "handlers/**"
+      - "src/scraper/**"
+      - "infra/step-function/**"
+      - "docker/**"
+      - "scripts/**"
+      - ".github/workflows/deploy-sam.yml"
+  workflow_dispatch:
+    inputs:
+      deploy:
+        description: "Deploy to AWS (false = build only)"
+        required: false
+        default: false
+        type: boolean
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install SAM CLI
+        run: |
+          curl -Lo sam.zip "https://github.com/aws/aws-sam-cli/releases/latest/download/aws-sam-cli-linux-x86_64.zip"
+          unzip sam.zip -d sam-install
+          sudo ./sam-install/install
+          sam --version
+
+      - name: Configure AWS credentials
+        if: github.event_name == 'push' || github.event.inputs.deploy == 'true'
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION || 'us-east-1' }}
+
+      - name: Prepare per-function directories
+        run: bash scripts/prepare_functions.sh
+
+      - name: SAM build
+        run: sam build --cached
+
+      - name: SAM validate
+        run: sam validate
+
+      - name: SAM deploy
+        if: github.event_name == 'push' || github.event.inputs.deploy == 'true'
+        run: sam deploy --no-confirm-changeset
+        env:
+          AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}

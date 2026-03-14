@@ -1,0 +1,11 @@
+# SAM deploy configuration
+# Override with --config-env <env> for multiple environments
+version = 0.1
+
+[default.deploy.parameters]
+stack_name = "fide-glicko"
+resolve_s3 = true
+resolve_image_repos = true
+capabilities = "CAPABILITY_IAM"
+parameter_overrides = []
+confirm_changeset = false

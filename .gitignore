@@ -46,6 +46,11 @@ go.mod
 
 # Project specific
 *.log
+.aws-sam/
+.functions/
+sam-install/
+sam.zip
+Untitled
 .pytest_cache/
 .coverage
 htmlcov/
