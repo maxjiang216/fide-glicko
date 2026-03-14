@@ -3,7 +3,7 @@
 Split tournament IDs into even chunks for fan-out processing.
 
 Reads IDs from a file (S3 or local), splits into N chunks, writes each chunk.
-Can optionally invoke the tournaments Lambda first to produce the IDs file.
+Fails fast if the IDs file does not exist.
 """
 
 import argparse
@@ -121,6 +121,11 @@ def run(
     """
     if quiet:
         logging.getLogger().setLevel(logging.WARNING)
+
+    if not _output_exists(ids_path):
+        raise RuntimeError(
+            f"Tournament IDs file not found: {ids_path}. Run get_tournaments first."
+        )
 
     ids = _read_ids(ids_path)
     if not ids:

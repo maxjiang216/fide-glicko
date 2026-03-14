@@ -207,6 +207,26 @@ def main() -> int:
         details_path = base / args.data_dir / "tournament_details" / f"{month_key}.parquet"
         reports_path = base / args.data_dir / "tournament_reports" / f"{month_key}_games.parquet"
 
+    # Fail fast if required files are missing
+    if not players_path.exists():
+        logger.error(
+            "Player list not found: %s. Run get_player_list first.",
+            players_path,
+        )
+        sys.exit(1)
+    if not details_path.exists():
+        logger.error(
+            "Tournament details not found: %s. Run get_tournament_details first.",
+            details_path,
+        )
+        sys.exit(1)
+    if not reports_path.exists():
+        logger.error(
+            "Tournament reports not found: %s. Run get_tournament_reports first.",
+            reports_path,
+        )
+        sys.exit(1)
+
     logger.info("Validating year=%s month=%s", args.year, args.month)
 
     has_error = False

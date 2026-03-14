@@ -1643,6 +1643,14 @@ def main():
 
     if args.input:
         input_path = args.input
+        from s3_io import output_exists as _path_exists
+
+        if not _path_exists(input_path):
+            logger.error(
+                "Tournament codes file not found: %s. Run get_tournament_details first.",
+                input_path,
+            )
+            sys.exit(1)
         try:
             tournament_codes = read_tournament_codes(input_path)
         except Exception as e:

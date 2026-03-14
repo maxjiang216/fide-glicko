@@ -1069,6 +1069,15 @@ def main():
         logger.error("Error: specify --input or --year and --month (or --run-type)")
         sys.exit(1)
 
+    from s3_io import output_exists as _path_exists
+
+    if not _path_exists(input_path):
+        logger.error(
+            "Tournament IDs file not found: %s. Run get_tournaments first.",
+            input_path,
+        )
+        sys.exit(1)
+
     # Determine output paths
     parquet_path = None
     json_path = None

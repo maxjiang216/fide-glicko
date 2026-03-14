@@ -915,6 +915,13 @@ def main() -> int:
         logger.info("Output %s already exists. Use --override to replace.", output_path)
         return 0
 
+    if not federations_path.exists():
+        logger.error(
+            "Federations file not found: %s. Run get_federations first.",
+            federations_path,
+        )
+        return 1
+
     # Run the scraper
     try:
         asyncio.run(
