@@ -216,22 +216,20 @@ def run(
     run_type: str,
     run_name: str | None,
     *,
-    players_uri: str | None = None,
-    details_uri: str | None = None,
-    reports_uri: str | None = None,
     quiet: bool = False,
 ) -> dict:
     """
     Validate pipeline data for a run. Downloads from S3, runs validation, uploads report.
 
+    All paths inferred from run_type and run_name:
+    - details: {base}/data/tournament_details.parquet
+    - reports: {base}/data/tournament_reports_games.parquet
+    - players: latest in {bucket}/player_lists/data/
+
     Args:
         bucket: S3 bucket.
         run_type: prod | custom | test.
         run_name: Required for prod/custom. Ignored for test.
-        federations_uri: Unused (for API consistency).
-        players_uri: Optional. Defaults to latest in player_lists/data/.
-        details_uri: Optional. Defaults to {base}/data/tournament_details.parquet.
-        reports_uri: Optional. Defaults to {base}/data/tournament_reports_games.parquet.
         quiet: Reduce log output.
 
     Returns:
@@ -245,7 +243,6 @@ def run(
         build_s3_uri_for_run,
         download_to_file,
         output_exists,
-        parse_s3_uri,
         resolve_latest_players_list_uri,
         write_output,
     )
@@ -256,16 +253,13 @@ def run(
 
     base = build_run_base(run_type, run_name)
 
-    if details_uri is None:
-        details_uri = build_s3_uri_for_run(
-            bucket, run_type, run_name, "data", "tournament_details.parquet"
-        )
-    if reports_uri is None:
-        reports_uri = build_s3_uri_for_run(
-            bucket, run_type, run_name, "data", "tournament_reports_games.parquet"
-        )
-    if players_uri is None:
-        players_uri = resolve_latest_players_list_uri(bucket)
+    details_uri = build_s3_uri_for_run(
+        bucket, run_type, run_name, "data", "tournament_details.parquet"
+    )
+    reports_uri = build_s3_uri_for_run(
+        bucket, run_type, run_name, "data", "tournament_reports_games.parquet"
+    )
+    players_uri = resolve_latest_players_list_uri(bucket)
 
     if not players_uri:
         raise RuntimeError(

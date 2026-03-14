@@ -5,18 +5,13 @@ Event shape:
 {
     "run_type": "prod",
     "run_name": "2024-01",
-    "bucket": "fide-glicko",
-    "players_uri": null,
-    "details_uri": null,
-    "reports_uri": null
+    "bucket": "fide-glicko"
 }
 
 - run_type: prod | custom | test (default: custom)
 - run_name: Required for prod/custom. Ignored for test.
 - bucket: S3 bucket (default: fide-glicko)
-- players_uri: Optional. Defaults to latest in player_lists/data/.
-- details_uri: Optional. Defaults to {base}/data/tournament_details.parquet.
-- reports_uri: Optional. Defaults to {base}/data/tournament_reports_games.parquet.
+- All paths inferred from run_type and run_name.
 
 Inputs: {base}/data/tournament_details.parquet, {base}/data/tournament_reports_games.parquet,
         latest player_lists/data/player_list_*.parquet
@@ -38,9 +33,6 @@ def lambda_handler(event: dict, context) -> dict:
     run_type = event.get("run_type", "custom")
     run_name = event.get("run_name")
     bucket = event.get("bucket", "fide-glicko")
-    players_uri = event.get("players_uri")
-    details_uri = event.get("details_uri")
-    reports_uri = event.get("reports_uri")
 
     if run_type not in ("prod", "custom", "test"):
         return {
@@ -67,9 +59,6 @@ def lambda_handler(event: dict, context) -> dict:
             bucket=bucket,
             run_type=run_type,
             run_name=run_name,
-            players_uri=players_uri,
-            details_uri=details_uri,
-            reports_uri=reports_uri,
             quiet=False,
         )
     except RuntimeError as e:
