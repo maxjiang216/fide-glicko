@@ -82,6 +82,42 @@ All Lambdas accept **run_type**, **run_name**, **bucket**, **override** where ap
 - Outputs: `{base}/data/tournament_reports_chunks/chunk_{i}_players.parquet`, `chunk_{i}_games.parquet`
 - Orchestrator: use `chunk_index` from each split_ids chunk, pass run_type/run_name from state
 
+### merge_chunks
+```json
+{
+  "run_type": "prod",
+  "run_name": "2024-01",
+  "bucket": "fide-glicko",
+  "override": false
+}
+```
+- **run_type**, **run_name**: Required (as above). Locates chunk prefixes.
+- **bucket**: default fide-glicko
+- **override**: If true, overwrite existing merged files (default: false)
+- Inputs: `{base}/data/tournament_details_chunks/chunk_*.parquet`, `{base}/data/tournament_reports_chunks/chunk_*_players.parquet`, `chunk_*_games.parquet`
+- Outputs: `{base}/data/tournament_details.parquet`, `{base}/data/tournament_reports_players.parquet`, `{base}/data/tournament_reports_games.parquet`
+- Returns: `details_uri`, `reports_players_uri`, `reports_games_uri`, `details_chunks`, `reports_chunks`
+
+### validate
+```json
+{
+  "run_type": "prod",
+  "run_name": "2024-01",
+  "bucket": "fide-glicko",
+  "players_uri": null,
+  "details_uri": null,
+  "reports_uri": null
+}
+```
+- **run_type**, **run_name**: Required (as above).
+- **bucket**: default fide-glicko
+- **players_uri**: Optional. Defaults to latest in `{bucket}/player_lists/data/`.
+- **details_uri**: Optional. Defaults to `{base}/data/tournament_details.parquet`.
+- **reports_uri**: Optional. Defaults to `{base}/data/tournament_reports_games.parquet`.
+- Inputs: Merged details, reports_games, and latest player list (run merge_chunks first).
+- Output: `{base}/reports/validation_report.json`
+- Returns: `report_uri`, `has_issues`, `player_list_vs_reports`, `details_vs_reports`
+
 ### player_list
 ```json
 {
