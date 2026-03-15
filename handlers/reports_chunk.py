@@ -8,19 +8,19 @@ Event shape:
     "chunk_index": 0,
     "bucket": "fide-glicko",
     "override": false,
-    "save_raw": false,
+    "save_raw": true,
     "details_path": null
 }
 
 - run_type: prod | custom | test (default: custom)
 - run_name: Required for prod/custom. Ignored for test.
-- chunk_index: Chunk index (0-based). Paths inferred as
-  {base}/data/tournament_id_chunks/chunk_{i}.txt and
-  {base}/data/tournament_reports_chunks/chunk_{i}.
+- chunk_index: Chunk index (0-based). Paths: ids_chunk_{i}.txt, reports_chunk_{i}_*.parquet
 - bucket: S3 bucket (default: fide-glicko)
 - override: If true, overwrite existing output (default: false)
-- save_raw: If true, save concatenated raw HTML to raw/reports/chunk_{i}.html.gz (default: false)
+- save_raw: If true, save raw HTML to raw/reports/reports_chunk_{i}.html.gz (default: true)
 - details_path: Optional S3 URI to details chunk parquet for date inference.
+
+Outputs: parquet, plus reports_chunk_{i}_verbose_sample.json and reports_chunk_{i}_games_sample.csv.
 """
 
 import logging
@@ -32,6 +32,14 @@ from get_tournament_reports import run
 logger = logging.getLogger(__name__)
 
 
+def _derive_sample_paths(output_path: str) -> tuple[str, str]:
+    """Derive sample JSON and CSV paths from output_path (data/ -> sample/)."""
+    if "/data/" not in output_path:
+        return "", ""
+    sample_base = output_path.replace("/data/", "/sample/", 1)
+    return sample_base + "_verbose_sample.json", sample_base + "_games_sample.csv"
+
+
 def lambda_handler(event: dict, context) -> dict:
     """Lambda entry point for tournament reports chunk scraper."""
     configure()
@@ -40,7 +48,7 @@ def lambda_handler(event: dict, context) -> dict:
     chunk_index = event.get("chunk_index")
     bucket = event.get("bucket", "fide-glicko")
     override = event.get("override", False)
-    save_raw = event.get("save_raw", False)
+    save_raw = event.get("save_raw", True)
     details_path = event.get("details_path")
 
     if run_type not in ("prod", "custom", "test"):
@@ -68,7 +76,7 @@ def lambda_handler(event: dict, context) -> dict:
         run_name,
         "data",
         "tournament_id_chunks",
-        f"chunk_{chunk_index}.txt",
+        f"ids_chunk_{chunk_index}.txt",
     )
     output_path = build_s3_uri_for_run(
         bucket,
@@ -76,8 +84,10 @@ def lambda_handler(event: dict, context) -> dict:
         run_name,
         "data",
         "tournament_reports_chunks",
-        f"chunk_{chunk_index}",
+        f"reports_chunk_{chunk_index}",
     )
+
+    output_sample_json, output_sample_csv = _derive_sample_paths(output_path)
 
     games_uri = output_path + "_games.parquet"
     if not override and output_exists(games_uri):
@@ -95,7 +105,7 @@ def lambda_handler(event: dict, context) -> dict:
             run_name,
             "data",
             "tournament_details_chunks",
-            f"chunk_{chunk_index}.parquet",
+            f"details_chunk_{chunk_index}.parquet",
         )
 
     logger.info(
@@ -112,6 +122,8 @@ def lambda_handler(event: dict, context) -> dict:
         max_retries=3,
         quiet=False,
         save_raw=save_raw,
+        output_sample_json=output_sample_json,
+        output_sample_csv=output_sample_csv,
     )
 
     if exit_code != 0:

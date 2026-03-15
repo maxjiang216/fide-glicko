@@ -100,12 +100,12 @@ s3://fide-glicko/
 │       ├── data/
 │       │   ├── tournament_ids.txt
 │       │   ├── tournament_id_chunks/
-│       │   │   └── chunk_{N}.txt
+│       │   │   └── ids_chunk_{N}.txt
 │       │   ├── tournament_details_chunks/
-│       │   │   └── chunk_{N}.parquet
+│       │   │   └── details_chunk_{N}.parquet
 │       │   ├── tournament_reports_chunks/
-│       │   │   ├── chunk_{N}_players.parquet
-│       │   │   └── chunk_{N}_games.parquet
+│       │   │   ├── reports_chunk_{N}_players.parquet
+│       │   │   └── reports_chunk_{N}_games.parquet
 │       │   ├── tournament_details.parquet
 │       │   ├── tournament_reports_players.parquet
 │       │   └── tournament_reports_games.parquet

@@ -7,7 +7,7 @@ Event shape:
     "run_name": "2024-01",
     "bucket": "fide-glicko",
     "ids_uri": null,
-    "chunk_size": 225,
+    "chunk_size": 300,
     "override": false
 }
 
@@ -17,7 +17,7 @@ Event shape:
 - bucket: S3 bucket (default: fide-glicko).
 - ids_uri: Path to tournament IDs file. If not set, uses {base}/data/tournament_ids.txt.
   Must exist; Step Function runs tournaments Lambda first.
-- chunk_size: Max tournaments per chunk (default: 225).
+- chunk_size: Max tournaments per chunk (default: 300).
 - override: Overwrite existing chunk files (default: false).
 
 Returns: { statusCode, success, chunks: [{ input_path, output_path, tournament_count, chunk_index }, ...] }
@@ -45,7 +45,7 @@ def lambda_handler(event: dict, context) -> dict:
     bucket = event.get("bucket", "fide-glicko")
     ids_uri = event.get("ids_uri")
     chunk_count = event.get("chunk_count")
-    chunk_size = event.get("chunk_size", 225)
+    chunk_size = event.get("chunk_size", 300)
     override = event.get("override", False)
 
     if run_type not in ("prod", "custom", "test"):

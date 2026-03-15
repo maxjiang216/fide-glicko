@@ -85,7 +85,7 @@ def main() -> int:
     parser.add_argument(
         "--test",
         action="store_true",
-        help="Test run with limited sampling: limit tournaments/details/reports to %d each, skip JSON/CSV samples"
+        help="Test run with limited sampling: limit tournaments/details/reports to %d each"
         % TEST_LIMIT_REPORTS,
     )
     parser.add_argument(
@@ -246,8 +246,6 @@ def main() -> int:
     ]
     if limit_reports > 0:
         reports_cmd.extend(["--limit", str(limit_reports)])
-    if args.test:
-        reports_cmd.append("--no-samples")
     if args.no_validation:
         reports_cmd.append("--no-validation")
     if not run(reports_cmd, base_dir, "STEP 5: Get tournament reports (games)"):

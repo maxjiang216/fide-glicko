@@ -4,7 +4,7 @@ Measure raw HTML response sizes from FIDE tournament details API.
 
 Fetches a sample of tournament IDs, reports uncompressed + gzip sizes.
 Run from repo root, e.g.:
-  python exploratory/measure_details_raw_size.py data/test/data/tournament_id_chunks/chunk_0.txt --limit 20
+  python exploratory/measure_details_raw_size.py data/test/data/tournament_id_chunks/ids_chunk_0.txt --limit 20
 """
 import argparse
 import gzip

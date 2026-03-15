@@ -66,7 +66,7 @@ aws stepfunctions start-execution \
 - **bucket** – S3 bucket (default: fide-glicko)
 - **override** – if true, refetch/overwrite even when cached (default: false)
 - **max_concurrency** – Map state parallelism for chunk processing (default: 10)
-- **chunk_size** – optional; Lambda default is 225
+- **chunk_size** – optional; default 300
 
 ## Check status
 
@@ -84,3 +84,7 @@ aws stepfunctions get-execution-history --execution-arn EXECUTION_ARN
 - Merge + Validate: ~2 min
 
 **Total: ~25–35 min**
+
+## Troubleshooting
+
+**ReportsChunk Lambda timeouts** – Each invocation has a 15 min max (Lambda limit). If a chunk times out (or Lambda.SdkClientException/Lambda.Unknown), the Map iterator retries it once (transient issues). Check CloudWatch Logs for `Slow report fetch`, `timeout`, `connection error` to diagnose anomalous chunks. For persistently slow months, re-run with smaller `chunk_size` (e.g. `150`).

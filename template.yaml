@@ -106,7 +106,7 @@ Resources:
         Command:
           - handlers.reports_chunk.lambda_handler
       Timeout: 900
-      MemorySize: 1024
+      MemorySize: 2048
       Policies:
         - S3CrudPolicy:
             BucketName: !Ref DataBucket
