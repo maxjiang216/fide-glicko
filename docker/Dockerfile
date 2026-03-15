@@ -5,6 +5,8 @@ FROM public.ecr.aws/lambda/python:3.12
 # Copy application code (DockerContext is repo root)
 COPY handlers /var/task/handlers
 COPY src /var/task/src
+# Scraper modules at root so "from get_player_list import", "from s3_io import" etc. resolve
+COPY src/scraper/*.py /var/task/
 
 # Install data deps (pandas, pyarrow, etc.)
 COPY docker/requirements.txt /var/task/
