@@ -456,6 +456,11 @@ def fetch_tournament_report(
             delay = 0.1 * (
                 2 ** (attempt - 1)
             )  # Exponential backoff: 100ms, 200ms, 400ms
+            logger.info(
+                "Retrying report fetch: tournament_code=%s attempt=%d",
+                tournament_code,
+                attempt + 1,
+            )
             time.sleep(delay)
 
         try:
@@ -473,9 +478,22 @@ def fetch_tournament_report(
             finally:
                 elapsed = time.perf_counter() - t0
                 attempt_times.append(elapsed)
+                if elapsed > 10:
+                    logger.warning(
+                        "Slow report fetch: tournament_code=%s took %.1fs (attempt %d)",
+                        tournament_code,
+                        elapsed,
+                        attempt + 1,
+                    )
 
             if response.status_code != 200:
                 last_error = f"HTTP {response.status_code}"
+                logger.warning(
+                    "HTTP error: tournament_code=%s status=%s (attempt %d)",
+                    tournament_code,
+                    response.status_code,
+                    attempt + 1,
+                )
                 if _attempt_log is not None:
                     _attempt_log.append(
                         {
@@ -644,6 +662,12 @@ def fetch_tournament_report(
 
         except requests.exceptions.Timeout as e:
             last_error = f"timeout: {e}"
+            logger.warning(
+                "Report fetch timeout: tournament_code=%s (attempt %d): %s",
+                tournament_code,
+                attempt + 1,
+                e,
+            )
             if _attempt_log is not None:
                 _attempt_log.append(
                     {
@@ -669,6 +693,12 @@ def fetch_tournament_report(
                 ]
             ):
                 last_error = f"network error: {e}"
+                logger.warning(
+                    "Report fetch connection error: tournament_code=%s (attempt %d): %s",
+                    tournament_code,
+                    attempt + 1,
+                    e,
+                )
                 if _attempt_log is not None:
                     _attempt_log.append(
                         {
@@ -680,6 +710,11 @@ def fetch_tournament_report(
                     )
                 continue
             last_error = f"connection error: {e}"
+            logger.warning(
+                "Report fetch connection error (non-retryable): tournament_code=%s: %s",
+                tournament_code,
+                e,
+            )
             return None, last_error, len(attempt_times), None
         except requests.exceptions.RequestException as e:
             error_str = str(e).lower()
@@ -696,6 +731,12 @@ def fetch_tournament_report(
                 ]
             ):
                 last_error = f"network error: {e}"
+                logger.warning(
+                    "Report fetch RequestException: tournament_code=%s (attempt %d): %s",
+                    tournament_code,
+                    attempt + 1,
+                    e,
+                )
                 if _attempt_log is not None:
                     _attempt_log.append(
                         {
@@ -707,9 +748,20 @@ def fetch_tournament_report(
                     )
                 continue
             last_error = f"network error: {e}"
+            logger.warning(
+                "Report fetch RequestException (non-retryable): tournament_code=%s: %s",
+                tournament_code,
+                e,
+            )
             return None, last_error, len(attempt_times), None
         except Exception as e:
             last_error = f"parse error: {e}"
+            logger.warning(
+                "Report fetch error: tournament_code=%s (attempt %d): %s",
+                tournament_code,
+                attempt + 1,
+                e,
+            )
             if _attempt_log is not None:
                 _attempt_log.append(
                     {
@@ -1275,7 +1327,7 @@ def save_verbose_json_sample(
     sample_size: int = 5,
     details_map: Optional[Dict[str, Tuple[Optional[str], Optional[str]]]] = None,
 ):
-    """Save a sample of raw results (tournaments with players/rounds) to JSON. Round dates are datetime (ISO when serialized)."""
+    """Save a sample of raw results (tournaments with players/rounds) to JSON. Supports local and S3 paths."""
     try:
         sample_results = [r for r in results if r.get("success")][:sample_size]
         if not sample_results:
@@ -1286,9 +1338,6 @@ def save_verbose_json_sample(
         _transform_results_round_dates_to_datetime(
             sample_results, details_map=details_map
         )
-        dirname = os.path.dirname(json_path)
-        if dirname:
-            os.makedirs(dirname, exist_ok=True)
 
         def _json_default(obj):
             if isinstance(obj, datetime):
@@ -1297,10 +1346,10 @@ def save_verbose_json_sample(
                 f"Object of type {type(obj).__name__} is not JSON serializable"
             )
 
-        with open(json_path, "w", encoding="utf-8") as f:
-            json.dump(
-                sample_results, f, indent=2, ensure_ascii=False, default=_json_default
-            )
+        content = json.dumps(
+            sample_results, indent=2, ensure_ascii=False, default=_json_default
+        )
+        _write_to_path(json_path, content)
         logger.info(f"Saved sample of {len(sample_results)} tournaments to {json_path}")
     except Exception as e:
         logger.error(f"Verbose JSON sample save failed: {e}")
@@ -1313,6 +1362,7 @@ def save_csv_sample_from_parquet(
 ):
     """
     Read parquet, sample rows, save as CSV to confirm the parquet file works.
+    Supports local and S3 paths for both input and output.
     """
     try:
         df = pd.read_parquet(parquet_path)
@@ -1321,10 +1371,8 @@ def save_csv_sample_from_parquet(
             return
         n = min(sample_size, len(df))
         sample_df = df.sample(n=n, random_state=42) if n < len(df) else df
-        csv_dir = os.path.dirname(csv_path)
-        if csv_dir:
-            os.makedirs(csv_dir, exist_ok=True)
-        sample_df.to_csv(csv_path, index=False)
+        content = sample_df.to_csv(index=False)
+        _write_to_path(csv_path, content)
         logger.info(f"Saved sample of {n} games to {csv_path} (confirms parquet)")
     except Exception as e:
         logger.error(f"CSV sample save failed: {e}")
@@ -1353,7 +1401,9 @@ def run(
     max_retries: int = 3,
     quiet: bool = False,
     limit: int = 0,
-    save_raw: bool = False,
+    save_raw: bool = True,
+    output_sample_json: Optional[str] = None,
+    output_sample_csv: Optional[str] = None,
 ) -> int:
     """
     Scrape tournament reports for codes from input_path, write to output_path.
@@ -1367,7 +1417,9 @@ def run(
         max_retries: Retry passes for failed fetches.
         quiet: Reduce log output.
         limit: Process only first N codes (0 = all).
-        save_raw: If True, save concatenated raw HTML to raw/reports/chunk_{i}.html.gz.
+        save_raw: If True, save concatenated raw HTML to raw/reports/reports_chunk_{i}.html.gz.
+        output_sample_json: Optional path for verbose JSON sample (tournaments with players/rounds).
+        output_sample_csv: Optional path for CSV sample from games parquet.
 
     Returns:
         0 on success, 1 on failure.
@@ -1479,6 +1531,11 @@ def run(
 
             result = {"tournament_code": code}
             if report is None:
+                logger.warning(
+                    "Report fetch failed: tournament_code=%s error=%s",
+                    code,
+                    error or "unknown",
+                )
                 error_count += 1
                 result["success"] = False
                 result["error"] = error or "fetch failed"
@@ -1528,6 +1585,16 @@ def run(
 
     save_players_parquet(all_results, players_path)
     save_games_parquet(all_results, games_path, details_map=details_map)
+
+    if output_sample_json:
+        save_verbose_json_sample(
+            all_results,
+            output_sample_json,
+            sample_size=100,
+            details_map=details_map,
+        )
+    if output_sample_csv:
+        save_csv_sample_from_parquet(games_path, output_sample_csv, sample_size=100)
 
     elapsed = time.time() - start_time
     logger.info(

@@ -259,6 +259,11 @@ def fetch_tournament_details(
             delay = 0.1 * (
                 2 ** (attempt - 1)
             )  # Exponential backoff: 100ms, 200ms, 400ms
+            logger.info(
+                "Retrying details fetch: tournament_id=%s attempt=%d",
+                tournament_id,
+                attempt + 1,
+            )
             time.sleep(delay)
 
         try:
@@ -275,9 +280,22 @@ def fetch_tournament_details(
             finally:
                 elapsed = time.perf_counter() - t0
                 attempt_times.append(elapsed)
+                if elapsed > 10:
+                    logger.warning(
+                        "Slow details fetch: tournament_id=%s took %.1fs (attempt %d)",
+                        tournament_id,
+                        elapsed,
+                        attempt + 1,
+                    )
 
             if response.status_code != 200:
                 last_error = f"HTTP {response.status_code}"
+                logger.warning(
+                    "HTTP error: tournament_id=%s status=%s (attempt %d)",
+                    tournament_id,
+                    response.status_code,
+                    attempt + 1,
+                )
                 if _attempt_log is not None:
                     _attempt_log.append(
                         {
@@ -342,6 +360,12 @@ def fetch_tournament_details(
 
         except requests.exceptions.Timeout as e:
             last_error = f"timeout: {e}"
+            logger.warning(
+                "Details fetch timeout: tournament_id=%s (attempt %d): %s",
+                tournament_id,
+                attempt + 1,
+                e,
+            )
             if _attempt_log is not None:
                 _attempt_log.append(
                     {
@@ -367,6 +391,12 @@ def fetch_tournament_details(
                 ]
             ):
                 last_error = f"network error: {e}"
+                logger.warning(
+                    "Details fetch connection error: tournament_id=%s (attempt %d): %s",
+                    tournament_id,
+                    attempt + 1,
+                    e,
+                )
                 if _attempt_log is not None:
                     _attempt_log.append(
                         {
@@ -378,6 +408,11 @@ def fetch_tournament_details(
                     )
                 continue
             last_error = f"connection error: {e}"
+            logger.warning(
+                "Details fetch connection error (non-retryable): tournament_id=%s: %s",
+                tournament_id,
+                e,
+            )
             return None, last_error, len(attempt_times), None
         except requests.exceptions.RequestException as e:
             error_str = str(e).lower()
@@ -394,6 +429,12 @@ def fetch_tournament_details(
                 ]
             ):
                 last_error = f"network error: {e}"
+                logger.warning(
+                    "Details fetch RequestException: tournament_id=%s (attempt %d): %s",
+                    tournament_id,
+                    attempt + 1,
+                    e,
+                )
                 if _attempt_log is not None:
                     _attempt_log.append(
                         {
@@ -405,9 +446,20 @@ def fetch_tournament_details(
                     )
                 continue
             last_error = f"network error: {e}"
+            logger.warning(
+                "Details fetch RequestException (non-retryable): tournament_id=%s: %s",
+                tournament_id,
+                e,
+            )
             return None, last_error, len(attempt_times), None
         except Exception as e:
             last_error = f"parse error: {e}"
+            logger.warning(
+                "Details fetch error: tournament_id=%s (attempt %d): %s",
+                tournament_id,
+                attempt + 1,
+                e,
+            )
             if _attempt_log is not None:
                 _attempt_log.append(
                     {
@@ -765,7 +817,7 @@ def run(
     limit: int = 0,
     output_sample_path: str | None = None,
     output_reports_base: str | None = None,
-    save_raw: bool = False,
+    save_raw: bool = True,
 ) -> int:
     """
     Scrape tournament details for IDs from input_path, write to output_path.
@@ -875,6 +927,11 @@ def run(
 
             result = {"tournament_id": tournament_id}
             if details is None:
+                logger.warning(
+                    "Details fetch failed: tournament_id=%s error=%s",
+                    tournament_id,
+                    error or "unknown",
+                )
                 error_count += 1
                 result["success"] = False
                 result["error"] = error or "fetch failed"

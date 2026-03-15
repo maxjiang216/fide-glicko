@@ -1,8 +1,8 @@
 """
 Merge tournament details and reports chunk parquets into single files.
 
-Reads from {base}/data/tournament_details_chunks/chunk_*.parquet and
-{base}/data/tournament_reports_chunks/chunk_*_players.parquet, chunk_*_games.parquet,
+Reads from {base}/data/tournament_details_chunks/details_chunk_*.parquet and
+{base}/data/tournament_reports_chunks/reports_chunk_*_players.parquet, reports_chunk_*_games.parquet,
 concatenates, and writes to {base}/data/:
   - tournament_details.parquet
   - tournament_reports_players.parquet
@@ -15,14 +15,14 @@ import re
 
 logger = logging.getLogger(__name__)
 
-# Chunk filenames: chunk_0.parquet, chunk_1.parquet, ...
-DETAILS_CHUNK_RE = re.compile(r"chunk_(\d+)\.parquet$")
-REPORTS_PLAYERS_RE = re.compile(r"chunk_(\d+)_players\.parquet$")
-REPORTS_GAMES_RE = re.compile(r"chunk_(\d+)_games\.parquet$")
+# Chunk filenames: details_chunk_0.parquet, reports_chunk_0_players.parquet, ...
+DETAILS_CHUNK_RE = re.compile(r"details_chunk_(\d+)\.parquet$")
+REPORTS_PLAYERS_RE = re.compile(r"reports_chunk_(\d+)_players\.parquet$")
+REPORTS_GAMES_RE = re.compile(r"reports_chunk_(\d+)_games\.parquet$")
 
 
 def _parse_chunk_index(key: str, pattern: re.Pattern) -> int | None:
-    """Extract chunk index from key like 'prod/2024-01/data/tournament_details_chunks/chunk_3.parquet'."""
+    """Extract chunk index from key like 'prod/2024-01/data/tournament_details_chunks/details_chunk_3.parquet'."""
     parts = key.split("/")
     if not parts:
         return None
@@ -93,7 +93,7 @@ def run(
     if not players_keys or not games_keys:
         raise RuntimeError(
             f"No reports chunks found under s3://{bucket}/{reports_prefix} "
-            "(need chunk_*_players.parquet and chunk_*_games.parquet)"
+            "(need reports_chunk_*_players.parquet and reports_chunk_*_games.parquet)"
         )
 
     details_uri = build_s3_uri_for_run(

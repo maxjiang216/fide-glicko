@@ -8,17 +8,15 @@ Event shape:
     "chunk_index": 0,
     "bucket": "fide-glicko",
     "override": false,
-    "save_raw": false
+    "save_raw": true
 }
 
 - run_type: prod | custom | test (default: custom)
 - run_name: Required for prod/custom. Ignored for test.
-- chunk_index: Chunk index (0-based). Paths inferred as
-  {base}/data/tournament_id_chunks/chunk_{i}.txt and
-  {base}/data/tournament_details_chunks/chunk_{i}.
+- chunk_index: Chunk index (0-based). Paths: ids_chunk_{i}.txt, details_chunk_{i}.parquet
 - bucket: S3 bucket (default: fide-glicko)
 - override: If true, overwrite existing output (default: false)
-- save_raw: If true, save concatenated raw HTML to raw/details/chunk_{i}.html.gz (default: false)
+- save_raw: If true, save raw HTML to raw/details/details_chunk_{i}.html.gz (default: true)
 """
 
 import logging
@@ -33,7 +31,7 @@ logger = logging.getLogger(__name__)
 def _derive_sample_and_reports_paths(output_path: str) -> tuple[str | None, str | None]:
     """
     Derive output_sample_path and output_reports_base from output_path.
-    output_path should contain /data/ (e.g. .../data/tournament_details_chunks/chunk_0).
+    output_path should contain /data/ (e.g. .../data/tournament_details_chunks/details_chunk_0).
     Returns (sample_path, reports_base) or (None, None) if /data/ not present.
     """
     if "/data/" not in output_path:
@@ -52,7 +50,7 @@ def lambda_handler(event: dict, context) -> dict:
     chunk_index = event.get("chunk_index")
     bucket = event.get("bucket", "fide-glicko")
     override = event.get("override", False)
-    save_raw = event.get("save_raw", False)
+    save_raw = event.get("save_raw", True)
 
     if run_type not in ("prod", "custom", "test"):
         return {
@@ -79,7 +77,7 @@ def lambda_handler(event: dict, context) -> dict:
         run_name,
         "data",
         "tournament_id_chunks",
-        f"chunk_{chunk_index}.txt",
+        f"ids_chunk_{chunk_index}.txt",
     )
     output_path = build_s3_uri_for_run(
         bucket,
@@ -87,7 +85,7 @@ def lambda_handler(event: dict, context) -> dict:
         run_name,
         "data",
         "tournament_details_chunks",
-        f"chunk_{chunk_index}",
+        f"details_chunk_{chunk_index}",
     )
 
     output_sample_path, output_reports_base = _derive_sample_and_reports_paths(

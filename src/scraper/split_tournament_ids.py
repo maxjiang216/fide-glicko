@@ -94,7 +94,7 @@ def even_split(items: List[str], n: int) -> List[List[str]]:
 def run(
     ids_path: str,
     chunk_count: Optional[int] = None,
-    chunk_size: int = 225,
+    chunk_size: int = 300,
     bucket: str = "fide-glicko",
     output_prefix: str = "data",
     chunk_prefix: str = "chunk",
@@ -108,7 +108,7 @@ def run(
     Args:
         ids_path: Path to tournament IDs file (one per line). S3 or local.
         chunk_count: Number of chunks (optional). If not set, derived from chunk_size.
-        chunk_size: Max tournaments per chunk when chunk_count not set (default: 225).
+        chunk_size: Max tournaments per chunk when chunk_count not set (default: 300).
         bucket: S3 bucket (for building chunk/output paths if using S3).
         output_prefix: S3 prefix when ids_path does not match standard structure.
         chunk_prefix: Prefix for chunk input files (unused with standard structure).
@@ -175,16 +175,21 @@ def run(
     result = []
     for i, chunk_ids in enumerate(chunks):
         chunk_content = "\n".join(chunk_ids) + "\n"
-        # New structure: tournament_id_chunks/chunk_{i}.txt, tournament_details_chunks/chunk_{i}
+        # Structure: tournament_id_chunks/ids_chunk_{i}.txt, tournament_details_chunks/details_chunk_{i}
         if _is_s3(run_base):
-            chunk_input_path = f"{run_base}/data/tournament_id_chunks/chunk_{i}.txt"
-            chunk_output_path = f"{run_base}/data/tournament_details_chunks/chunk_{i}"
+            chunk_input_path = f"{run_base}/data/tournament_id_chunks/ids_chunk_{i}.txt"
+            chunk_output_path = (
+                f"{run_base}/data/tournament_details_chunks/details_chunk_{i}"
+            )
         else:
             chunk_input_path = str(
-                Path(run_base) / "data" / "tournament_id_chunks" / f"chunk_{i}.txt"
+                Path(run_base) / "data" / "tournament_id_chunks" / f"ids_chunk_{i}.txt"
             )
             chunk_output_path = str(
-                Path(run_base) / "data" / "tournament_details_chunks" / f"chunk_{i}"
+                Path(run_base)
+                / "data"
+                / "tournament_details_chunks"
+                / f"details_chunk_{i}"
             )
 
         if not override and _output_exists(chunk_input_path):
@@ -226,8 +231,8 @@ def main() -> int:
     parser.add_argument(
         "--chunk-size",
         type=int,
-        default=225,
-        help="Max tournaments per chunk when chunk-count not set (default: 225)",
+        default=300,
+        help="Max tournaments per chunk when chunk-count not set (default: 300)",
     )
     parser.add_argument(
         "--bucket",

@@ -87,7 +87,8 @@
                 "run_type.$": "$.run_type",
                 "run_name.$": "$.run_name",
                 "bucket.$": "$.bucket",
-                "override.$": "$.override"
+                "override.$": "$.override",
+                "chunk_size.$": "$.chunk_size"
               },
               "End": true
             }
@@ -211,6 +212,16 @@
                 "IntervalSeconds": 5,
                 "MaxAttempts": 3,
                 "BackoffRate": 2
+              },
+              {
+                "ErrorEquals": [
+                  "Lambda.ClientExecutionTimeoutException",
+                  "Lambda.SdkClientException",
+                  "Lambda.Unknown"
+                ],
+                "IntervalSeconds": 30,
+                "MaxAttempts": 1,
+                "BackoffRate": 2
               }
             ],
             "Catch": [
@@ -231,7 +242,7 @@
               "chunk_index.$": "$.chunk_index",
               "bucket.$": "$.bucket",
               "override.$": "$.override",
-              "save_raw": false
+              "save_raw": true
             },
             "Retry": [
               {
@@ -244,6 +255,16 @@
                 "ErrorEquals": ["Lambda.ServiceException"],
                 "IntervalSeconds": 5,
                 "MaxAttempts": 3,
+                "BackoffRate": 2
+              },
+              {
+                "ErrorEquals": [
+                  "Lambda.ClientExecutionTimeoutException",
+                  "Lambda.SdkClientException",
+                  "Lambda.Unknown"
+                ],
+                "IntervalSeconds": 30,
+                "MaxAttempts": 1,
                 "BackoffRate": 2
               }
             ],
