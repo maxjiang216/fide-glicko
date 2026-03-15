@@ -93,6 +93,7 @@ jobs:
         run: pytest tests/test_step_function.py -v
 
       - name: Validate Step Function definition
+        if: github.event_name == 'push' || github.event_name == 'pull_request' || github.event.inputs.deploy == 'true'
         run: |
           pip install boto3 --quiet
           python -c "
