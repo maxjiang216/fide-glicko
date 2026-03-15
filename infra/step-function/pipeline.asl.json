@@ -183,6 +183,7 @@
         "run_type.$": "$$.Map.Item.Value.run_type",
         "run_name.$": "$$.Map.Item.Value.run_name",
         "chunk_index.$": "$$.Map.Item.Value.chunk_index",
+        "chunk_count.$": "$$.Map.Item.Value.chunk_count",
         "bucket.$": "$$.Execution.Input.bucket",
         "override.$": "$$.Execution.Input.override"
       },
@@ -196,6 +197,7 @@
               "run_type.$": "$.run_type",
               "run_name.$": "$.run_name",
               "chunk_index.$": "$.chunk_index",
+              "chunk_count.$": "$.chunk_count",
               "bucket.$": "$.bucket",
               "override.$": "$.override"
             },
@@ -220,7 +222,7 @@
                   "Lambda.Unknown"
                 ],
                 "IntervalSeconds": 30,
-                "MaxAttempts": 1,
+                "MaxAttempts": 5,
                 "BackoffRate": 2
               }
             ],
@@ -240,6 +242,7 @@
               "run_type.$": "$.run_type",
               "run_name.$": "$.run_name",
               "chunk_index.$": "$.chunk_index",
+              "chunk_count.$": "$.chunk_count",
               "bucket.$": "$.bucket",
               "override.$": "$.override",
               "save_raw": true

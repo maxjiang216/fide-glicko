@@ -66,7 +66,7 @@ aws stepfunctions start-execution \
 - **bucket** – S3 bucket (default: fide-glicko)
 - **override** – if true, refetch/overwrite even when cached (default: false)
 - **max_concurrency** – Map state parallelism for chunk processing (default: 10)
-- **chunk_size** – optional; default 400
+- **chunk_size** – optional; default 300
 
 ## Check status
 
@@ -89,4 +89,4 @@ aws stepfunctions get-execution-history --execution-arn EXECUTION_ARN
 
 **ReportsChunk Lambda timeouts** – Each invocation has a 15 min max (Lambda limit). If a chunk times out (or Lambda.SdkClientException/Lambda.Unknown), the Map iterator retries it once (transient issues). Check CloudWatch Logs for `Slow report fetch`, `timeout`, `connection error` to diagnose anomalous chunks. For persistently slow months, re-run with smaller `chunk_size` (e.g. `150`).
 
-**Connect timeout (all-or-nothing per chunk)** – When a Lambda can't connect to ratings.fide.com, it typically fails for every tournament in that chunk. The scraper fails fast (15s connect timeout, abort after 2 consecutive) so the Step Function can retry with fresh Lambdas. ReportsChunk retries 5× and the Map retries 3× to avoid omitting tournaments due to transient connectivity.
+**Connect timeout (all-or-nothing per chunk)** – When a Lambda can't connect to ratings.fide.com, it typically fails for every tournament in that chunk. The scraper fails fast (15s connect timeout, abort after 2 consecutive) so the Step Function can retry with fresh Lambdas. DetailsChunk errors go to ChunkFailed (Pass state); ReportsChunk has no Catch so its failures surface as MapIterationFailed. The Map retries 4× to handle transient connectivity.

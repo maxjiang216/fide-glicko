@@ -73,33 +73,6 @@ def _output_exists(path: str) -> bool:
     return Path(path).exists()
 
 
-def _count_existing_id_chunks(run_base: str, bucket: str, n_chunks: int) -> int:
-    """Count existing ids_chunk_*.txt files. Used to detect chunk param changes."""
-    if _is_s3(run_base):
-        try:
-            from s3_io import list_s3_objects, parse_s3_uri
-
-            bucket_name, key_prefix = parse_s3_uri(run_base)
-            chunk_prefix = f"{key_prefix}/data/tournament_id_chunks/"
-            objects = list_s3_objects(bucket_name, chunk_prefix)
-            # Count keys like ids_chunk_0.txt, ids_chunk_1.txt, ...
-            prefix = "ids_chunk_"
-            suffix = ".txt"
-            count = sum(
-                1
-                for k, _ in objects
-                if k.split("/")[-1].startswith(prefix) and k.endswith(suffix)
-            )
-            return count
-        except Exception:
-            return 0
-    # Local
-    base = Path(run_base) / "data" / "tournament_id_chunks"
-    if not base.exists():
-        return 0
-    return sum(1 for p in base.glob("ids_chunk_*.txt") if p.is_file())
-
-
 def even_split(items: List[str], n: int) -> List[List[str]]:
     """Split list into n chunks as evenly as possible."""
     if n <= 0:
@@ -121,7 +94,7 @@ def even_split(items: List[str], n: int) -> List[List[str]]:
 def run(
     ids_path: str,
     chunk_count: Optional[int] = None,
-    chunk_size: int = 400,
+    chunk_size: int = 300,
     bucket: str = "fide-glicko",
     output_prefix: str = "data",
     chunk_prefix: str = "chunk",
@@ -135,7 +108,7 @@ def run(
     Args:
         ids_path: Path to tournament IDs file (one per line). S3 or local.
         chunk_count: Number of chunks (optional). If not set, derived from chunk_size.
-        chunk_size: Max tournaments per chunk when chunk_count not set (default: 400).
+        chunk_size: Max tournaments per chunk when chunk_count not set (default: 300).
         bucket: S3 bucket (for building chunk/output paths if using S3).
         output_prefix: S3 prefix when ids_path does not match standard structure.
         chunk_prefix: Prefix for chunk input files (unused with standard structure).
@@ -199,39 +172,32 @@ def run(
         [len(c) for c in chunks],
     )
 
-    # If chunk_size/chunk_count changed, existing files have wrong boundaries—must rewrite.
-    force_rewrite = False
-    if not override:
-        existing_count = _count_existing_id_chunks(run_base, bucket, n_chunks)
-        if existing_count != n_chunks:
-            force_rewrite = True
-            logger.info(
-                "Chunk params changed: existing=%d, needed=%d—rewriting id chunks",
-                existing_count,
-                n_chunks,
-            )
+    # With _of_{n} naming, different chunk sizes produce different paths—no force_rewrite needed.
 
     result = []
     for i, chunk_ids in enumerate(chunks):
         chunk_content = "\n".join(chunk_ids) + "\n"
-        # Structure: tournament_id_chunks/ids_chunk_{i}.txt, tournament_details_chunks/details_chunk_{i}
+        # Structure: tournament_id_chunks/ids_chunk_{i}_of_{n}.txt (n=chunk_count disambiguates runs)
         if _is_s3(run_base):
-            chunk_input_path = f"{run_base}/data/tournament_id_chunks/ids_chunk_{i}.txt"
-            chunk_output_path = (
-                f"{run_base}/data/tournament_details_chunks/details_chunk_{i}"
+            chunk_input_path = (
+                f"{run_base}/data/tournament_id_chunks/ids_chunk_{i}_of_{n_chunks}.txt"
             )
+            chunk_output_path = f"{run_base}/data/tournament_details_chunks/details_chunk_{i}_of_{n_chunks}"
         else:
             chunk_input_path = str(
-                Path(run_base) / "data" / "tournament_id_chunks" / f"ids_chunk_{i}.txt"
+                Path(run_base)
+                / "data"
+                / "tournament_id_chunks"
+                / f"ids_chunk_{i}_of_{n_chunks}.txt"
             )
             chunk_output_path = str(
                 Path(run_base)
                 / "data"
                 / "tournament_details_chunks"
-                / f"details_chunk_{i}"
+                / f"details_chunk_{i}_of_{n_chunks}"
             )
 
-        if not override and not force_rewrite and _output_exists(chunk_input_path):
+        if not override and _output_exists(chunk_input_path):
             logger.info("Chunk %d already exists, skipping write", i)
         else:
             _write_chunk(chunk_content, chunk_input_path)
@@ -245,6 +211,7 @@ def run(
                 "output_path": chunk_output_path,
                 "tournament_count": len(chunk_ids),
                 "chunk_index": i,
+                "chunk_count": n_chunks,
             }
         )
 
@@ -271,7 +238,7 @@ def main() -> int:
         "--chunk-size",
         type=int,
         default=300,
-        help="Max tournaments per chunk when chunk-count not set (default: 400)",
+        help="Max tournaments per chunk when chunk-count not set (default: 300)",
     )
     parser.add_argument(
         "--bucket",

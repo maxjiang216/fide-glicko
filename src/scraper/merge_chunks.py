@@ -15,10 +15,24 @@ import re
 
 logger = logging.getLogger(__name__)
 
-# Chunk filenames: details_chunk_0.parquet, reports_chunk_0_players.parquet, ...
-DETAILS_CHUNK_RE = re.compile(r"details_chunk_(\d+)\.parquet$")
-REPORTS_PLAYERS_RE = re.compile(r"reports_chunk_(\d+)_players\.parquet$")
-REPORTS_GAMES_RE = re.compile(r"reports_chunk_(\d+)_games\.parquet$")
+
+# Chunk filenames: details_chunk_0_of_15.parquet (new) or details_chunk_0.parquet (legacy)
+def _details_re(n: int | None) -> re.Pattern:
+    if n is not None:
+        return re.compile(rf"details_chunk_(\d+)_of_{n}\.parquet$")
+    return re.compile(r"details_chunk_(\d+)\.parquet$")
+
+
+def _reports_players_re(n: int | None) -> re.Pattern:
+    if n is not None:
+        return re.compile(rf"reports_chunk_(\d+)_of_{n}_players\.parquet$")
+    return re.compile(r"reports_chunk_(\d+)_players\.parquet$")
+
+
+def _reports_games_re(n: int | None) -> re.Pattern:
+    if n is not None:
+        return re.compile(rf"reports_chunk_(\d+)_of_{n}_games\.parquet$")
+    return re.compile(r"reports_chunk_(\d+)_games\.parquet$")
 
 
 def _parse_chunk_index(key: str, pattern: re.Pattern) -> int | None:
@@ -68,6 +82,7 @@ def run(
         list_s3_objects,
         output_exists,
         parse_s3_uri,
+        read_run_metadata,
         write_run_metadata,
     )
 
@@ -75,25 +90,30 @@ def run(
         logging.getLogger().setLevel(logging.WARNING)
 
     base = build_run_base(run_type, run_name)
+    base_uri = f"s3://{bucket}/{base}"
+    metadata = read_run_metadata(base_uri)
+    chunk_count = metadata.get("chunk_count") if metadata else None
+
     details_prefix = f"{base}/data/tournament_details_chunks/"
     reports_prefix = f"{base}/data/tournament_reports_chunks/"
 
-    # List chunk files
     details_objs = list_s3_objects(bucket, details_prefix)
     reports_objs = list_s3_objects(bucket, reports_prefix)
 
-    details_keys = _sorted_chunk_keys([k for k, _ in details_objs], DETAILS_CHUNK_RE)
-    players_keys = _sorted_chunk_keys([k for k, _ in reports_objs], REPORTS_PLAYERS_RE)
-    games_keys = _sorted_chunk_keys([k for k, _ in reports_objs], REPORTS_GAMES_RE)
-
-    if not details_keys:
+    # Prefer new naming (_of_{n}); fall back to legacy for existing runs
+    for try_chunk_count in [chunk_count, None]:
+        details_re = _details_re(try_chunk_count)
+        players_re = _reports_players_re(try_chunk_count)
+        games_re = _reports_games_re(try_chunk_count)
+        details_keys = _sorted_chunk_keys([k for k, _ in details_objs], details_re)
+        players_keys = _sorted_chunk_keys([k for k, _ in reports_objs], players_re)
+        games_keys = _sorted_chunk_keys([k for k, _ in reports_objs], games_re)
+        if details_keys and players_keys and games_keys:
+            break
+    else:
         raise RuntimeError(
-            f"No details chunks found under s3://{bucket}/{details_prefix}"
-        )
-    if not players_keys or not games_keys:
-        raise RuntimeError(
-            f"No reports chunks found under s3://{bucket}/{reports_prefix} "
-            "(need reports_chunk_*_players.parquet and reports_chunk_*_games.parquet)"
+            f"No details/reports chunks found under s3://{bucket}/{details_prefix} "
+            f"(tried both details_chunk_*_of_{{n}}.parquet and details_chunk_*.parquet)"
         )
 
     details_uri = build_s3_uri_for_run(
@@ -134,6 +154,19 @@ def run(
         obj = s3.get_object(Bucket=bucket, Key=key)
         return pq.read_table(io.BytesIO(obj["Body"].read()))
 
+    def _concat_tables_unified(tables: list[pa.Table]) -> pa.Table:
+        """Concat tables, unifying schemas (e.g. n_players int64 vs double)."""
+        if not tables:
+            return pa.table({})
+        try:
+            return pa.concat_tables(tables, promote_options="permissive")
+        except pa.ArrowInvalid:
+            # Fallback: pandas concat handles mixed types (PyArrow < 14 or edge cases)
+            import pandas as pd
+
+            dfs = [t.to_pandas() for t in tables]
+            return pa.Table.from_pandas(pd.concat(dfs, ignore_index=True))
+
     def _write_parquet(table: pa.Table, uri: str) -> None:
         buf = io.BytesIO()
         pq.write_table(table, buf)
@@ -144,7 +177,7 @@ def run(
     # Merge details
     logger.info("Merging %d details chunks -> %s", len(details_keys), details_uri)
     details_tables = [_read_parquet(k) for k in details_keys]
-    details_merged = pa.concat_tables(details_tables)
+    details_merged = _concat_tables_unified(details_tables)
     _write_parquet(details_merged, details_uri)
     del details_tables, details_merged
 
@@ -153,14 +186,14 @@ def run(
         "Merging %d reports players chunks -> %s", len(players_keys), players_uri
     )
     players_tables = [_read_parquet(k) for k in players_keys]
-    players_merged = pa.concat_tables(players_tables)
+    players_merged = _concat_tables_unified(players_tables)
     _write_parquet(players_merged, players_uri)
     del players_tables, players_merged
 
     # Merge reports games
     logger.info("Merging %d reports games chunks -> %s", len(games_keys), games_uri)
     games_tables = [_read_parquet(k) for k in games_keys]
-    games_merged = pa.concat_tables(games_tables)
+    games_merged = _concat_tables_unified(games_tables)
     _write_parquet(games_merged, games_uri)
 
     base_uri = f"s3://{bucket}/{base}"

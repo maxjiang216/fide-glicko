@@ -264,6 +264,27 @@ def get_latest_in_local_prefix(
     return files[0][0], files[0][1]
 
 
+def read_run_metadata(base_path: str | Path) -> dict | None:
+    """
+    Read run_metadata.json from run root. Returns dict or None if not found.
+    base_path: S3 URI (s3://bucket/prod/2024-01) or local path.
+    """
+    if is_s3_path(str(base_path)):
+        try:
+            import boto3
+
+            bucket, key_prefix = parse_s3_uri(str(base_path))
+            s3 = boto3.client("s3")
+            obj = s3.get_object(Bucket=bucket, Key=f"{key_prefix}/run_metadata.json")
+            return json.loads(obj["Body"].read().decode("utf-8"))
+        except Exception:
+            return None
+    path = Path(base_path) / "run_metadata.json"
+    if not path.exists():
+        return None
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
 def write_run_metadata(
     base_path: str | Path,
     metadata: dict,

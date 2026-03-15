@@ -629,10 +629,17 @@ def save_time_control_unique_values(results: List[Dict], output_path: str):
         logger.error(f"Time control unique values save failed: {e}")
 
 
+# Columns that can be int or None across chunks; use float64 for consistent Parquet schema
+_NULLABLE_NUMERIC_COLS = ("n_players",)
+
+
 def save_results_parquet(results: List[Dict], parquet_path: str) -> None:
     """Save results as Parquet file (local or S3)."""
     try:
         df = results_to_dataframe(results)
+        for col in _NULLABLE_NUMERIC_COLS:
+            if col in df.columns:
+                df[col] = df[col].astype("float64")
         buf = io.BytesIO()
         df.to_parquet(buf, index=False, engine="pyarrow")
         _write_to_path(parquet_path, buf.getvalue())
