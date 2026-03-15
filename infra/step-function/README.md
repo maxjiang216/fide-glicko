@@ -7,7 +7,7 @@ Orchestrates the full scraping flow: federations → tournaments → parallel(sp
 1. **Federations** – fetch federation list (shared across runs)
 2. **Tournaments** – fetch tournament IDs per federation
 3. **Parallel** – split_ids and player_list run in parallel (neither depends on the other)
-4. **Map** – each chunk runs details_chunk then reports_chunk (sequential per chunk; MaxConcurrency 40)
+4. **Map** – each chunk runs details_chunk then reports_chunk (sequential per chunk; MaxConcurrency 15)
 5. **MergeChunks** – combine parquet outputs
 6. **Validate** – run validation report
 
@@ -58,7 +58,7 @@ aws stepfunctions get-execution-history --execution-arn EXECUTION_ARN
 - Federations: ~1 min
 - Tournaments: ~5–10 min
 - SplitIds + Player list (parallel): ~2 min
-- Map (details ~7.5 min + reports ~3.75 min per chunk, 40 concurrent): ~12–15 min
+- Map (details ~7.5 min + reports ~3.75 min per chunk, 15 concurrent): ~20–25 min
 - Merge + Validate: ~2 min
 
 **Total: ~25–35 min**
