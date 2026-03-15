@@ -75,6 +75,8 @@ jobs:
 
       - name: SAM validate
         run: sam validate
+        env:
+          AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
 
       - name: SAM deploy
         if: github.event_name == 'push' || github.event.inputs.deploy == 'true'
