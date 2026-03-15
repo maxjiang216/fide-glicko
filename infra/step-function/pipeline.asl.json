@@ -149,7 +149,7 @@
     "SplitIdsFailed": {
       "Type": "Fail",
       "Error": "SplitIdsFailed",
-      "Cause.$": "$.parallel_split_player[0].error"
+      "CausePath": "$.parallel_split_player[0].error"
     },
 
     "MapDetailsAndReports": {
