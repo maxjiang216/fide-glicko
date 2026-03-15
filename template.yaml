@@ -87,7 +87,7 @@ Resources:
         Command:
           - handlers.details_chunk.lambda_handler
       Timeout: 900
-      MemorySize: 1024
+      MemorySize: 512
       Policies:
         - S3CrudPolicy:
             BucketName: !Ref DataBucket
@@ -144,7 +144,7 @@ Resources:
         Command:
           - handlers.validate.lambda_handler
       Timeout: 300
-      MemorySize: 1024
+      MemorySize: 1536
       Policies:
         - S3CrudPolicy:
             BucketName: !Ref DataBucket
