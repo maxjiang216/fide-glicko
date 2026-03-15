@@ -57,7 +57,7 @@ jobs:
         run: |
           curl -Lo sam.zip "https://github.com/aws/aws-sam-cli/releases/latest/download/aws-sam-cli-linux-x86_64.zip"
           unzip sam.zip -d sam-install
-          sudo ./sam-install/install
+          sudo ./sam-install/install --update
           sam --version
 
       - name: Configure AWS credentials
