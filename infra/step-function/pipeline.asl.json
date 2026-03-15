@@ -1,5 +1,5 @@
 {
-  "Comment": "FIDE scraping pipeline: federations, tournaments, player_list, split_ids, Map(details+reports per chunk), merge, validate",
+  "Comment": "FIDE scraping pipeline: federations -> tournaments -> parallel(split_ids, player_list) -> Map(details+reports) -> merge -> validate",
   "StartAt": "EnsureRunName",
   "States": {
     "EnsureRunName": {
@@ -48,21 +48,49 @@
           "Next": "PipelineFailed"
         }
       ],
-      "Next": "ParallelData"
+      "Next": "Tournaments"
     },
 
-    "ParallelData": {
+    "Tournaments": {
+      "Type": "Task",
+      "Resource": "${TournamentsFunctionArn}",
+      "Parameters": {
+        "year.$": "$.year",
+        "month.$": "$.month",
+        "run_type.$": "$.run_type",
+        "run_name.$": "$.run_name",
+        "bucket.$": "$.bucket",
+        "override.$": "$.override"
+      },
+      "ResultPath": "$.tournaments",
+      "Retry": [
+        {
+          "ErrorEquals": ["Lambda.ServiceException", "Lambda.TooManyRequestsException"],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.error",
+          "Next": "PipelineFailed"
+        }
+      ],
+      "Next": "ParallelSplitIdsAndPlayerList"
+    },
+
+    "ParallelSplitIdsAndPlayerList": {
       "Type": "Parallel",
       "Branches": [
         {
-          "StartAt": "Tournaments",
+          "StartAt": "SplitIds",
           "States": {
-            "Tournaments": {
+            "SplitIds": {
               "Type": "Task",
-              "Resource": "${TournamentsFunctionArn}",
+              "Resource": "${SplitIdsFunctionArn}",
               "Parameters": {
-                "year.$": "$.year",
-                "month.$": "$.month",
                 "run_type.$": "$.run_type",
                 "run_name.$": "$.run_name",
                 "bucket.$": "$.bucket",
@@ -87,35 +115,7 @@
           }
         }
       ],
-      "ResultPath": "$.parallel_data",
-      "Retry": [
-        {
-          "ErrorEquals": ["Lambda.ServiceException", "Lambda.TooManyRequestsException"],
-          "IntervalSeconds": 2,
-          "MaxAttempts": 3,
-          "BackoffRate": 2
-        }
-      ],
-      "Catch": [
-        {
-          "ErrorEquals": ["States.ALL"],
-          "ResultPath": "$.error",
-          "Next": "PipelineFailed"
-        }
-      ],
-      "Next": "SplitIds"
-    },
-
-    "SplitIds": {
-      "Type": "Task",
-      "Resource": "${SplitIdsFunctionArn}",
-      "Parameters": {
-        "run_type.$": "$.run_type",
-        "run_name.$": "$.run_name",
-        "bucket.$": "$.bucket",
-        "override.$": "$.override"
-      },
-      "ResultPath": "$.split_ids",
+      "ResultPath": "$.parallel_split_player",
       "Retry": [
         {
           "ErrorEquals": ["Lambda.ServiceException", "Lambda.TooManyRequestsException"],
@@ -136,7 +136,7 @@
 
     "MapDetailsAndReports": {
       "Type": "Map",
-      "ItemsPath": "$.split_ids.chunks",
+      "ItemsPath": "$.parallel_split_player[0].chunks",
       "MaxConcurrency": 40,
       "ItemSelector": {
         "run_type.$": "$$.Execution.Input.run_type",

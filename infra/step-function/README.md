@@ -1,12 +1,12 @@
 # FIDE Scraping Step Functions Pipeline
 
-Orchestrates the full scraping flow: federations → tournaments + player_list (parallel) → split_ids → Map(details + reports per chunk) → merge → validate.
+Orchestrates the full scraping flow: federations → tournaments → parallel(split_ids, player_list) → Map(details + reports per chunk) → merge → validate.
 
 ## Flow
 
 1. **Federations** – fetch federation list (shared across runs)
-2. **Parallel** – tournaments and player_list run in parallel
-3. **SplitIds** – chunk tournament IDs (~225 per chunk, ~75 chunks)
+2. **Tournaments** – fetch tournament IDs per federation
+3. **Parallel** – split_ids and player_list run in parallel (neither depends on the other)
 4. **Map** – each chunk runs details_chunk then reports_chunk (sequential per chunk; MaxConcurrency 40)
 5. **MergeChunks** – combine parquet outputs
 6. **Validate** – run validation report
@@ -56,8 +56,8 @@ aws stepfunctions get-execution-history --execution-arn EXECUTION_ARN
 ## Estimated duration
 
 - Federations: ~1 min
-- Tournaments + Player list (parallel): ~5–10 min
-- SplitIds: ~30 s
+- Tournaments: ~5–10 min
+- SplitIds + Player list (parallel): ~2 min
 - Map (details ~7.5 min + reports ~3.75 min per chunk, 40 concurrent): ~12–15 min
 - Merge + Validate: ~2 min
 
