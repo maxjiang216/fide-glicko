@@ -71,7 +71,7 @@ jobs:
           aws-region: ${{ vars.AWS_REGION || 'us-east-1' }}
 
       - name: Sync deploy policy from repo
-        if: github.event_name == 'push' || github.event.inputs.deploy == 'true'
+        if: github.event_name == 'push' || github.event_name == 'pull_request' || github.event.inputs.deploy == 'true'
         env:
           ROLE_ARN: ${{ secrets.AWS_ROLE_ARN }}
         run: |
