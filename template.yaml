@@ -1,0 +1,190 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: FIDE Glicko scraping pipeline - Lambdas and Step Functions
+
+Parameters:
+  DataBucket:
+    Type: String
+    Default: fide-glicko
+    Description: S3 bucket for scraped data and Lambda deployment artifacts
+
+Globals:
+  Function:
+    Timeout: 60
+    MemorySize: 256
+    Architectures:
+      - x86_64
+
+Resources:
+  FederationsFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: fide-glicko-federations
+      Runtime: python3.12
+      CodeUri: .functions/federations
+      Handler: handlers.federations.lambda_handler
+      Timeout: 60
+      MemorySize: 256
+      Policies:
+        - S3CrudPolicy:
+            BucketName: !Ref DataBucket
+      Description: Fetch FIDE federation list
+
+  TournamentsFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: fide-glicko-tournaments
+      Runtime: python3.12
+      CodeUri: .functions/tournaments
+      Handler: handlers.tournaments.lambda_handler
+      Timeout: 900
+      MemorySize: 512
+      Policies:
+        - S3CrudPolicy:
+            BucketName: !Ref DataBucket
+      Description: Fetch tournament IDs per federation
+
+  PlayerListFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      DockerContext: .
+      Dockerfile: docker/Dockerfile
+      DockerTag: data
+    Properties:
+      FunctionName: fide-glicko-player-list
+      PackageType: Image
+      ImageConfig:
+        Command:
+          - handlers.player_list.lambda_handler
+      Timeout: 300
+      MemorySize: 3008
+      Policies:
+        - S3CrudPolicy:
+            BucketName: !Ref DataBucket
+      Description: Fetch FIDE player list XML
+
+  DetailsChunkFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      DockerContext: .
+      Dockerfile: docker/Dockerfile
+      DockerTag: data
+    Properties:
+      FunctionName: fide-glicko-details-chunk
+      PackageType: Image
+      ImageConfig:
+        Command:
+          - handlers.details_chunk.lambda_handler
+      Timeout: 900
+      MemorySize: 1024
+      Policies:
+        - S3CrudPolicy:
+            BucketName: !Ref DataBucket
+      Description: Scrape tournament details for a chunk
+
+  ReportsChunkFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      DockerContext: .
+      Dockerfile: docker/Dockerfile
+      DockerTag: data
+    Properties:
+      FunctionName: fide-glicko-reports-chunk
+      PackageType: Image
+      ImageConfig:
+        Command:
+          - handlers.reports_chunk.lambda_handler
+      Timeout: 900
+      MemorySize: 1024
+      Policies:
+        - S3CrudPolicy:
+            BucketName: !Ref DataBucket
+      Description: Scrape tournament reports for a chunk
+
+  MergeChunksFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      DockerContext: .
+      Dockerfile: docker/Dockerfile
+      DockerTag: data
+    Properties:
+      FunctionName: fide-glicko-merge-chunks
+      PackageType: Image
+      ImageConfig:
+        Command:
+          - handlers.merge_chunks.lambda_handler
+      Timeout: 300
+      MemorySize: 2048
+      Policies:
+        - S3CrudPolicy:
+            BucketName: !Ref DataBucket
+      Description: Merge detail and report chunks into single parquet files
+
+  ValidateFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      DockerContext: .
+      Dockerfile: docker/Dockerfile
+      DockerTag: data
+    Properties:
+      FunctionName: fide-glicko-validate
+      PackageType: Image
+      ImageConfig:
+        Command:
+          - handlers.validate.lambda_handler
+      Timeout: 300
+      MemorySize: 1024
+      Policies:
+        - S3CrudPolicy:
+            BucketName: !Ref DataBucket
+      Description: Validate pipeline data consistency
+
+  SplitIdsFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: fide-glicko-split-ids
+      Runtime: python3.12
+      CodeUri: .functions/split_ids
+      Handler: handlers.split_ids.lambda_handler
+      Timeout: 120
+      MemorySize: 256
+      Policies:
+        - S3CrudPolicy:
+            BucketName: !Ref DataBucket
+      Description: Split tournament IDs into chunks
+
+  PipelineStateMachine:
+    Type: AWS::Serverless::StateMachine
+    Properties:
+      Name: fide-glicko-pipeline
+      DefinitionUri: infra/step-function/pipeline.asl.json
+      DefinitionSubstitutions:
+        FederationsFunctionArn: !GetAtt FederationsFunction.Arn
+        TournamentsFunctionArn: !GetAtt TournamentsFunction.Arn
+        PlayerListFunctionArn: !GetAtt PlayerListFunction.Arn
+        SplitIdsFunctionArn: !GetAtt SplitIdsFunction.Arn
+        DetailsChunkFunctionArn: !GetAtt DetailsChunkFunction.Arn
+        ReportsChunkFunctionArn: !GetAtt ReportsChunkFunction.Arn
+        MergeChunksFunctionArn: !GetAtt MergeChunksFunction.Arn
+        ValidateFunctionArn: !GetAtt ValidateFunction.Arn
+      Policies:
+        - Version: "2012-10-17"
+          Statement:
+            - Effect: Allow
+              Action: lambda:InvokeFunction
+              Resource:
+                - !GetAtt FederationsFunction.Arn
+                - !GetAtt TournamentsFunction.Arn
+                - !GetAtt PlayerListFunction.Arn
+                - !GetAtt SplitIdsFunction.Arn
+                - !GetAtt DetailsChunkFunction.Arn
+                - !GetAtt ReportsChunkFunction.Arn
+                - !GetAtt MergeChunksFunction.Arn
+                - !GetAtt ValidateFunction.Arn
+
+Outputs:
+  PipelineStateMachineArn:
+    Description: Step Functions state machine ARN
+    Value: !Ref PipelineStateMachine
+    Export:
+      Name: !Sub "${AWS::StackName}-PipelineArn"
