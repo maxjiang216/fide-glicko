@@ -513,7 +513,7 @@ async def scrape_month(
         logger.info("Read %d federations from %s", len(federations), federations_path)
     except Exception as e:
         logger.error(f"Error reading federations: {e}")
-        return []
+        return [], 0, 0
 
     logger.info(
         f"Processing {len(federations)} federations for {year}-{month:02d} "
@@ -693,7 +693,21 @@ async def scrape_month(
         print(f"  By time control: {tc_counts}")
     print("=" * 80)
 
-    return unique_tournaments
+    return unique_tournaments, len(errors), len(federations)
+
+
+def _scrape_exit_code(n_errors: int, n_total: int) -> int:
+    """
+    Return exit code for scrape outcome.
+
+    - 0: All federations succeeded (or no federations to process).
+    - 1: Any federation failed — fail so we don't use partial/incomplete data.
+    """
+    if n_total == 0:
+        return 0
+    if n_errors > 0:
+        return 1
+    return 0
 
 
 def run(
@@ -760,7 +774,7 @@ def run(
         return 1
 
     try:
-        asyncio.run(
+        _, n_errors, n_total = asyncio.run(
             scrape_month(
                 year,
                 month,
@@ -771,7 +785,7 @@ def run(
                 json_uri=json_uri,
             )
         )
-        return 0
+        return _scrape_exit_code(n_errors, n_total)
     except Exception as e:
         logger.error("Fatal error: %s", e)
         return 1
@@ -924,7 +938,7 @@ def main() -> int:
 
     # Run the scraper
     try:
-        asyncio.run(
+        _, n_errors, n_total = asyncio.run(
             scrape_month(
                 args.year,
                 args.month,
@@ -939,7 +953,7 @@ def main() -> int:
                 save_raw=not args.no_save_raw,
             )
         )
-        return 0
+        return _scrape_exit_code(n_errors, n_total)
     except KeyboardInterrupt:
         logger.info("Interrupted by user")
         return 130  # Standard exit code for SIGINT
