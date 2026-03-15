@@ -13,6 +13,7 @@
         "cloudformation:DescribeStackResource",
         "cloudformation:DescribeStackResources",
         "cloudformation:GetTemplate",
+        "cloudformation:GetTemplateSummary",
         "cloudformation:ListStackResources",
         "cloudformation:ValidateTemplate"
       ],
