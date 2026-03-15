@@ -2,6 +2,12 @@
   "Version": "2012-10-17",
   "Statement": [
     {
+      "Sid": "SyncPolicy",
+      "Effect": "Allow",
+      "Action": "iam:PutRolePolicy",
+      "Resource": "arn:aws:iam::710271917035:policy/fide-glicko-github-deploy"
+    },
+    {
       "Sid": "CloudFormation",
       "Effect": "Allow",
       "Action": [
@@ -121,6 +127,12 @@
         "states:ListStateMachines"
       ],
       "Resource": "arn:aws:states:us-east-1:710271917035:stateMachine:fide-glicko-pipeline"
+    },
+    {
+      "Sid": "StepFunctionsValidate",
+      "Effect": "Allow",
+      "Action": ["states:ValidateStateMachineDefinition"],
+      "Resource": "*"
     }
   ]
 }

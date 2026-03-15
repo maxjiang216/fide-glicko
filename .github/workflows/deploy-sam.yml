@@ -16,7 +16,7 @@ on:
       - "requirements.txt"
       - "handlers/**"
       - "src/scraper/**"
-      - "infra/step-function/**"
+      - "infra/**"
       - "docker/**"
       - "scripts/**"
       - ".github/workflows/deploy-sam.yml"
@@ -27,7 +27,7 @@ on:
       - "requirements.txt"
       - "handlers/**"
       - "src/scraper/**"
-      - "infra/step-function/**"
+      - "infra/**"
       - "docker/**"
       - "scripts/**"
       - ".github/workflows/deploy-sam.yml"
@@ -60,12 +60,25 @@ jobs:
           sudo ./sam-install/install --update
           sam --version
 
+      - name: Install dependencies
+        run: pip install -e .
+
       - name: Configure AWS credentials
-        if: github.event_name == 'push' || github.event.inputs.deploy == 'true'
+        if: github.event_name == 'push' || github.event_name == 'pull_request' || github.event.inputs.deploy == 'true'
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
           aws-region: ${{ vars.AWS_REGION || 'us-east-1' }}
+
+      - name: Sync deploy policy from repo
+        if: github.event_name == 'push' || github.event.inputs.deploy == 'true'
+        env:
+          ROLE_ARN: ${{ secrets.AWS_ROLE_ARN }}
+        run: |
+          ROLE_NAME=$(echo "$ROLE_ARN" | sed -n 's|.*/\([^/]*\)$|\1|p')
+          sed "s|__DEPLOY_ROLE_ARN__|$ROLE_ARN|g" infra/github-deploy-policy.json > /tmp/deploy-policy.json
+          aws iam put-role-policy --role-name "$ROLE_NAME" --policy-name GithubDeploy --policy-document file:///tmp/deploy-policy.json
+          echo "Synced infra/github-deploy-policy.json to role $ROLE_NAME"
 
       - name: Prepare per-function directories
         run: bash scripts/prepare_functions.sh
@@ -75,6 +88,34 @@ jobs:
 
       - name: SAM validate
         run: sam validate --region ${{ vars.AWS_REGION || 'us-east-1' }}
+
+      - name: Validate Step Function (static)
+        run: pytest tests/test_step_function.py -v
+
+      - name: Validate Step Function definition
+        run: |
+          pip install boto3 --quiet
+          python -c "
+          import json
+          import boto3
+          import sys
+
+          with open('infra/step-function/pipeline.asl.json') as f:
+              definition = f.read()
+
+          placeholder = 'arn:aws:lambda:${{ vars.AWS_REGION || 'us-east-1' }}:123456789012:function:placeholder'
+          for var in ['FederationsFunctionArn', 'TournamentsFunctionArn', 'PlayerListFunctionArn',
+                      'SplitIdsFunctionArn', 'DetailsChunkFunctionArn', 'ReportsChunkFunctionArn',
+                      'MergeChunksFunctionArn', 'ValidateFunctionArn']:
+              definition = definition.replace('\${' + var + '}', placeholder)
+
+          client = boto3.client('stepfunctions', region_name='${{ vars.AWS_REGION || 'us-east-1' }}')
+          resp = client.validate_state_machine_definition(definition=definition)
+          if resp['result'] != 'OK':
+              print('Validation failed:', resp.get('diagnostics', []))
+              sys.exit(1)
+          print('Step Function definition valid (result=OK)')
+          "
 
       - name: SAM deploy
         if: github.event_name == 'push' || github.event.inputs.deploy == 'true'

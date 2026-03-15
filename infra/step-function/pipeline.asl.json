@@ -157,8 +157,8 @@
       "ItemsPath": "$.parallel_split_player[0].chunks",
       "MaxConcurrency": 40,
       "ItemSelector": {
-        "run_type.$": "$$.Execution.Input.run_type",
-        "run_name.$": "$$.Execution.Input.run_name",
+        "run_type.$": "$$.Map.Item.Value.run_type",
+        "run_name.$": "$$.Map.Item.Value.run_name",
         "chunk_index.$": "$$.Map.Item.Value.chunk_index",
         "bucket.$": "$$.Execution.Input.bucket",
         "override.$": "$$.Execution.Input.override"
