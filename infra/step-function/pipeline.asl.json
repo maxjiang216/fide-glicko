@@ -1,7 +1,30 @@
 {
   "Comment": "FIDE scraping pipeline: federations, tournaments, player_list, split_ids, Map(details+reports per chunk), merge, validate",
-  "StartAt": "Federations",
+  "StartAt": "EnsureRunName",
   "States": {
+    "EnsureRunName": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.run_name",
+          "IsPresent": true,
+          "Next": "Federations"
+        }
+      ],
+      "Default": "AddDefaultRunName"
+    },
+    "AddDefaultRunName": {
+      "Type": "Pass",
+      "Parameters": {
+        "year.$": "$.year",
+        "month.$": "$.month",
+        "run_type.$": "$.run_type",
+        "run_name": "test",
+        "bucket.$": "$.bucket",
+        "override.$": "$.override"
+      },
+      "Next": "Federations"
+    },
     "Federations": {
       "Type": "Task",
       "Resource": "${FederationsFunctionArn}",
