@@ -32,7 +32,7 @@ uv run scripts/run_prod_backfill.py --start 2024-01 --end 2024-03 --dry-run
 | `--bucket` | S3 bucket (default: fide-glicko). |
 | `--override` | Pass override=true to pipeline. |
 | `--max-concurrency` | Map concurrency per execution (default: 10). |
-| `--chunk-size` | Max tournaments per chunk (default: 300). |
+| `--chunk-size` | Max tournaments per chunk (default: 400). |
 | `--dry-run` | List months without starting. |
 
 ## run_full_pipeline.py

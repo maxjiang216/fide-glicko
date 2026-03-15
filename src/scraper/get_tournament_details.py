@@ -276,7 +276,8 @@ def fetch_tournament_details(
 
             t0 = time.perf_counter()
             try:
-                response = session.get(url, headers=headers, timeout=45)
+                # Connect 15s, read 45s (match reports; fail connect fast for all-or-nothing)
+                response = session.get(url, headers=headers, timeout=(15, 45))
             finally:
                 elapsed = time.perf_counter() - t0
                 attempt_times.append(elapsed)
@@ -375,6 +376,9 @@ def fetch_tournament_details(
                         "duration_s": attempt_times[-1] if attempt_times else 0,
                     }
                 )
+            # Connect timeout = all-or-nothing per Lambda; retries don't help
+            if "connect" in str(e).lower() and "timeout" in str(e).lower():
+                break
             continue
         except requests.exceptions.ConnectionError as e:
             error_str = str(e).lower()
@@ -903,6 +907,8 @@ def run(
         )
 
     start_time = time.time()
+    consecutive_connect_timeouts = 0
+    CONSECUTIVE_CONNECT_TIMEOUT_THRESHOLD = 2
 
     for pass_num in range(max_retries + 1):
         if not current_tournaments:
@@ -917,6 +923,7 @@ def run(
             )
             time.sleep(delay)
             total_retries += len(current_tournaments)
+            consecutive_connect_timeouts = 0  # reset on new pass
 
         pass_failed = []
         for tournament_id in current_tournaments:
@@ -936,6 +943,21 @@ def run(
                 result["success"] = False
                 result["error"] = error or "fetch failed"
                 error_lower = (error or "").lower()
+                is_connect_timeout = (
+                    "connect" in error_lower and "timeout" in error_lower
+                ) or "connecttimeout" in error_lower
+                if is_connect_timeout:
+                    consecutive_connect_timeouts += 1
+                    if (
+                        consecutive_connect_timeouts
+                        >= CONSECUTIVE_CONNECT_TIMEOUT_THRESHOLD
+                    ):
+                        raise RuntimeError(
+                            f"Details fetch: {CONSECUTIVE_CONNECT_TIMEOUT_THRESHOLD} consecutive "
+                            "connect timeouts; aborting chunk so Step Function can retry with fresh Lambda"
+                        ) from None
+                else:
+                    consecutive_connect_timeouts = 0
                 network_error_patterns = [
                     "eof",
                     "connection reset",
@@ -952,6 +974,7 @@ def run(
                 ):
                     pass_failed.append(tournament_id)
             else:
+                consecutive_connect_timeouts = 0
                 success_count += 1
                 result["success"] = True
                 result["details"] = details

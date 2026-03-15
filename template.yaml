@@ -49,7 +49,7 @@ Resources:
       CodeUri: .functions/tournaments
       Handler: handlers.tournaments.lambda_handler
       Timeout: 900
-      MemorySize: 512
+      MemorySize: 256
       Policies:
         - S3CrudPolicy:
             BucketName: !Ref DataBucket
@@ -95,6 +95,7 @@ Resources:
 
   ReportsChunkFunction:
     Type: AWS::Serverless::Function
+
     Metadata:
       DockerContext: .
       Dockerfile: docker/Dockerfile
@@ -106,7 +107,7 @@ Resources:
         Command:
           - handlers.reports_chunk.lambda_handler
       Timeout: 900
-      MemorySize: 2048
+      MemorySize: 1024
       Policies:
         - S3CrudPolicy:
             BucketName: !Ref DataBucket

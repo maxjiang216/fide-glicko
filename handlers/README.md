@@ -53,14 +53,14 @@ All Lambdas accept **run_type**, **run_name**, **bucket**, **override** where ap
   "run_type": "custom",
   "run_name": "2024-01",
   "bucket": "fide-glicko",
-  "chunk_size": 300,
+  "chunk_size": 400,
   "override": false
 }
 ```
 - **run_type**, **run_name**: Used to locate `{base}/data/tournament_ids.txt`. No year/month
   required — paths derive from run folder.
 - **ids_uri**: Optional. Defaults to `{base}/data/tournament_ids.txt`
-- **chunk_size**: default 300
+- **chunk_size**: default 400
 - **chunk_count**: Optional override
 - Returns: `chunks: [{ input_path, output_path, tournament_count, chunk_index }, ...]`
 

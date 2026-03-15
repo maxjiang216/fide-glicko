@@ -447,7 +447,9 @@ def fetch_tournament_report(
     """
     url = f"https://ratings.fide.com/tournament_src_report.phtml?code={tournament_code}"
 
-    max_retries = 3
+    max_retries = 2
+    # Fail fast on connect: 15s to establish, 45s to read (large report pages)
+    connect_timeout, read_timeout = 15, 45
     last_error = None
     attempt_times: List[float] = []
 
@@ -474,7 +476,9 @@ def fetch_tournament_report(
 
             t0 = time.perf_counter()
             try:
-                response = session.get(url, headers=headers, timeout=45)
+                response = session.get(
+                    url, headers=headers, timeout=(connect_timeout, read_timeout)
+                )
             finally:
                 elapsed = time.perf_counter() - t0
                 attempt_times.append(elapsed)
@@ -677,6 +681,9 @@ def fetch_tournament_report(
                         "duration_s": attempt_times[-1] if attempt_times else 0,
                     }
                 )
+            # Connect timeout = all-or-nothing per Lambda; retries don't help
+            if "connect" in str(e).lower() and "timeout" in str(e).lower():
+                break
             continue
         except requests.exceptions.ConnectionError as e:
             error_str = str(e).lower()
@@ -1398,7 +1405,6 @@ def run(
     output_path: str,
     details_path: Optional[str] = None,
     rate_limit: float = 0.5,
-    max_retries: int = 3,
     quiet: bool = False,
     limit: int = 0,
     save_raw: bool = True,
@@ -1414,7 +1420,6 @@ def run(
             {output_path}_games.parquet.
         details_path: Optional path to tournament_details parquet for date inference.
         rate_limit: Requests per second (0 = no limit, natural throughput).
-        max_retries: Retry passes for failed fetches.
         quiet: Reduce log output.
         limit: Process only first N codes (0 = all).
         save_raw: If True, save concatenated raw HTML to raw/reports/reports_chunk_{i}.html.gz.
@@ -1492,7 +1497,6 @@ def run(
 
     all_results: List[Dict] = []
     success_count = 0
-    error_count = 0
     current_codes = codes
 
     pbar = None
@@ -1508,66 +1512,30 @@ def run(
 
     start_time = time.time()
 
-    for pass_num in range(max_retries + 1):
-        if not current_codes:
-            break
-        if pass_num > 0:
-            delay = 3 * (2 ** (pass_num - 1))
-            logger.info(
-                "Retry pass %d: waiting %s before retrying %d tournaments",
-                pass_num,
-                format_duration(delay),
-                len(current_codes),
-            )
-            time.sleep(delay)
+    for code in current_codes:
+        if rate_limiter:
+            rate_limiter.wait()
+        report, error, _, raw_content = fetch_tournament_report(
+            code, session, return_raw=save_raw
+        )
 
-        pass_failed = []
-        for code in current_codes:
-            if rate_limiter:
-                rate_limiter.wait()
-            report, error, _, raw_content = fetch_tournament_report(
-                code, session, return_raw=save_raw
-            )
+        result = {"tournament_code": code}
+        if report is None:
+            raise RuntimeError(
+                f"Report fetch failed for tournament {code}: {error or 'unknown'}; "
+                "aborting chunk so Step Function can retry with fresh Lambda"
+            ) from None
 
-            result = {"tournament_code": code}
-            if report is None:
-                logger.warning(
-                    "Report fetch failed: tournament_code=%s error=%s",
-                    code,
-                    error or "unknown",
-                )
-                error_count += 1
-                result["success"] = False
-                result["error"] = error or "fetch failed"
-                error_lower = (error or "").lower()
-                network_error_patterns = [
-                    "eof",
-                    "connection reset",
-                    "connection aborted",
-                    "remotedisconnected",
-                    "remote end closed",
-                    "broken pipe",
-                ]
-                is_network_error = any(p in error_lower for p in network_error_patterns)
-                if (
-                    error
-                    and (is_network_error or "timeout" in error_lower)
-                    and pass_num < max_retries
-                ):
-                    pass_failed.append(code)
-            else:
-                success_count += 1
-                result["success"] = True
-                result.update(report)
-                if raw_base and raw_content:
-                    raw_accumulator.append((code, raw_content))
+        success_count += 1
+        result["success"] = True
+        result.update(report)
+        if raw_base and raw_content:
+            raw_accumulator.append((code, raw_content))
 
-            all_results.append(result)
-            if pbar:
-                pbar.update(1)
-                pbar.set_postfix({"✓": success_count, "✗": error_count})
-
-        current_codes = pass_failed
+        all_results.append(result)
+        if pbar:
+            pbar.update(1)
+            pbar.set_postfix({"✓": success_count})
 
     if pbar:
         pbar.close()
@@ -1597,12 +1565,7 @@ def run(
         save_csv_sample_from_parquet(games_path, output_sample_csv, sample_size=100)
 
     elapsed = time.time() - start_time
-    logger.info(
-        "Done: %d success, %d errors in %s",
-        success_count,
-        error_count,
-        format_duration(elapsed),
-    )
+    logger.info("Done: %d tournaments in %s", success_count, format_duration(elapsed))
     return 0
 
 
