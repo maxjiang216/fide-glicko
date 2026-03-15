@@ -95,10 +95,11 @@ def lambda_handler(event: dict, context) -> dict:
     parquet_uri = output_path + ".parquet"
     if not override and output_exists(parquet_uri):
         return {
-            "statusCode": 409,
-            "success": False,
-            "error": "Output already exists; pass override=true to replace",
+            "statusCode": 200,
+            "success": True,
+            "skipped": True,
             "output_path": parquet_uri,
+            "message": "Output already exists; left as-is (pass override=true to replace)",
         }
 
     logger.info(

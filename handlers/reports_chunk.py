@@ -92,10 +92,11 @@ def lambda_handler(event: dict, context) -> dict:
     games_uri = output_path + "_games.parquet"
     if not override and output_exists(games_uri):
         return {
-            "statusCode": 409,
-            "success": False,
-            "error": "Output already exists; pass override=true to replace",
+            "statusCode": 200,
+            "success": True,
+            "skipped": True,
             "output_path": games_uri,
+            "message": "Output already exists; left as-is (pass override=true to replace)",
         }
 
     if details_path is None:
@@ -119,7 +120,6 @@ def lambda_handler(event: dict, context) -> dict:
         output_path=output_path,
         details_path=details_path,
         rate_limit=0,
-        max_retries=3,
         quiet=False,
         save_raw=save_raw,
         output_sample_json=output_sample_json,

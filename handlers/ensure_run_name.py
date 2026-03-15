@@ -14,7 +14,7 @@ Event shape (passthrough from execution input):
     "bucket": "fide-glicko",
     "override": false,
     "max_concurrency": 10,
-    "chunk_size": 300
+    "chunk_size": 400
 }
 
 Returns the same input with run_name set. Fails with 400 if validation fails.
@@ -50,5 +50,5 @@ def lambda_handler(event: dict, context) -> dict:
     # Apply defaults for optional fields
     out.setdefault("bucket", "fide-glicko")
     out.setdefault("override", False)
-    out.setdefault("chunk_size", 300)
+    out.setdefault("chunk_size", 400)
     return out

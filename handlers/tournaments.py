@@ -78,10 +78,11 @@ def lambda_handler(event: dict, context) -> dict:
 
     if not override and output_exists(ids_uri):
         return {
-            "statusCode": 409,
-            "success": False,
-            "error": "Output already exists; pass override=true to replace",
+            "statusCode": 200,
+            "success": True,
+            "skipped": True,
             "output_path": ids_uri,
+            "message": "Output already exists; left as-is (pass override=true to replace)",
         }
 
     if federations_s3_uri is None:
