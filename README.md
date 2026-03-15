@@ -82,6 +82,19 @@ The project includes Python scripts for scraping tournament data from the FIDE w
    ```
    See [scripts/README.md](scripts/README.md) for details.
 
+### AWS Step Function (deployed pipeline)
+
+When deployed to AWS, the pipeline runs as a Step Function. To start a production run for a given month:
+
+```bash
+aws stepfunctions start-execution \
+  --state-machine-arn arn:aws:states:REGION:ACCOUNT:stateMachine:fide-glicko-pipeline \
+  --name "run-$(date +%Y%m%d-%H%M%S)" \
+  --input '{"year": 2025, "month": 3, "run_type": "prod"}'
+```
+
+For prod, `run_name` is derived as `YYYY-MM`; no need to pass it. See [infra/step-function/README.md](infra/step-function/README.md) for full options and [infra/README.md](infra/README.md) for deploy and S3 layout.
+
 The scraper outputs data in efficient Parquet format with JSON samples for quick inspection. See the [scraper README](src/scraper/README.md) for complete documentation.
 
 ## Testing
