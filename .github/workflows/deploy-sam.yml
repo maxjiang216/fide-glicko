@@ -105,7 +105,7 @@ jobs:
               definition = f.read()
 
           placeholder = 'arn:aws:lambda:${{ vars.AWS_REGION || 'us-east-1' }}:123456789012:function:placeholder'
-          for var in ['FederationsFunctionArn', 'TournamentsFunctionArn', 'PlayerListFunctionArn',
+          for var in ['EnsureRunNameFunctionArn', 'FederationsFunctionArn', 'TournamentsFunctionArn', 'PlayerListFunctionArn',
                       'SplitIdsFunctionArn', 'DetailsChunkFunctionArn', 'ReportsChunkFunctionArn',
                       'MergeChunksFunctionArn', 'ValidateFunctionArn']:
               definition = definition.replace('\${' + var + '}', placeholder)

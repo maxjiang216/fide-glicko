@@ -1,28 +1,21 @@
 {
-  "Comment": "FIDE scraping pipeline: federations -> tournaments -> parallel(split_ids, player_list) -> Map(details+reports) -> merge -> validate",
+  "Comment": "FIDE scraping pipeline: ensure_run_name -> federations -> tournaments -> parallel(split_ids, player_list) -> Map(details+reports) -> merge -> validate",
   "StartAt": "EnsureRunName",
   "States": {
     "EnsureRunName": {
-      "Type": "Choice",
-      "Choices": [
+      "Type": "Task",
+      "Resource": "${EnsureRunNameFunctionArn}",
+      "Parameters": {
+        "input.$": "$"
+      },
+      "ResultPath": "$",
+      "Catch": [
         {
-          "Variable": "$.run_name",
-          "IsPresent": true,
-          "Next": "Federations"
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.error",
+          "Next": "PipelineFailed"
         }
       ],
-      "Default": "AddDefaultRunName"
-    },
-    "AddDefaultRunName": {
-      "Type": "Pass",
-      "Parameters": {
-        "year.$": "$.year",
-        "month.$": "$.month",
-        "run_type.$": "$.run_type",
-        "run_name": "test",
-        "bucket.$": "$.bucket",
-        "override.$": "$.override"
-      },
       "Next": "Federations"
     },
     "Federations": {
@@ -170,7 +163,7 @@
         "federations.$": "$.federations",
         "tournaments.$": "$.tournaments",
         "parallel_split_player.$": "$.parallel_split_player",
-        "max_concurrency": 5
+        "max_concurrency": 10
       },
       "Next": "MapDetailsAndReports"
     },

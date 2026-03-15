@@ -2,7 +2,22 @@
 
 All Lambdas accept **run_type**, **run_name**, **bucket**, **override** where applicable. Paths are inferred from these; explicit URIs are optional overrides.
 
+**Prod runs:** `run_name` is derived as `YYYY-MM` from year and month by the pipeline; Lambdas receive it from state. For custom runs, `run_name` is required.
+
 ## Event Shapes (minimal = run params only)
+
+### ensure_run_name
+```json
+{
+  "year": 2025,
+  "month": 3,
+  "run_type": "prod",
+  "bucket": "fide-glicko",
+  "override": false
+}
+```
+- Normalizes `run_name` before pipeline: prod = `{year}-{month:02d}`, custom = required, test = `"test"`
+- Returns full passthrough with `run_name` set. Called first by the Step Function.
 
 ### federations
 ```json
@@ -22,13 +37,13 @@ All Lambdas accept **run_type**, **run_name**, **bucket**, **override** where ap
   "year": 2025,
   "month": 3,
   "run_type": "prod",
-  "run_name": "2024-01",
+  "run_name": "2025-03",
   "bucket": "fide-glicko",
   "override": false
 }
 ```
 - **year**, **month**: Required
-- **run_type**, **run_name**: As above
+- **run_type**, **run_name**: run_name comes from EnsureRunName (prod: YYYY-MM; custom: user-provided)
 - **federations_s3_uri**: Optional. Defaults to latest in `{bucket}/federations/data/`
 - Outputs: `{base}/data/tournament_ids.txt`, `{base}/sample/tournament_ids_sample.json`, `{base}/raw/tournaments.json.gz` (raw API JSON, all federations concatenated, gzip-9)
 
@@ -129,7 +144,7 @@ All Lambdas accept **run_type**, **run_name**, **bucket**, **override** where ap
 
 ## Path formula
 
-- **base** = `{run_type}/{run_name}` for prod/custom, or `test` for run_type=test
+- **base** = `prod/{YYYY-MM}` for prod, `custom/{run_name}` for custom, or `test` for run_type=test
 - **Shared** (federations, player list): `{bucket}/federations/data/federations_{timestamp}.csv`, `{bucket}/player_lists/data/player_list_{timestamp}.parquet`, `{bucket}/player_lists/raw/player_list_{timestamp}.xml.gz` — all run types share these; 2-week staleness check.
 - **Per-run data**: `{bucket}/{base}/data/...`
 - **raw**: `{bucket}/{base}/raw/...` (compressed downloads)

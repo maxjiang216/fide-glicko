@@ -16,6 +16,17 @@ Globals:
       - x86_64
 
 Resources:
+  EnsureRunNameFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: fide-glicko-ensure-run-name
+      Runtime: python3.12
+      CodeUri: .functions/ensure_run_name
+      Handler: handlers.ensure_run_name.lambda_handler
+      Timeout: 10
+      MemorySize: 128
+      Description: Normalize run_name for pipeline (prod=YYYY-MM, custom=required, test=default)
+
   FederationsFunction:
     Type: AWS::Serverless::Function
     Properties:
@@ -159,6 +170,7 @@ Resources:
       Name: fide-glicko-pipeline
       DefinitionUri: infra/step-function/pipeline.asl.json
       DefinitionSubstitutions:
+        EnsureRunNameFunctionArn: !GetAtt EnsureRunNameFunction.Arn
         FederationsFunctionArn: !GetAtt FederationsFunction.Arn
         TournamentsFunctionArn: !GetAtt TournamentsFunction.Arn
         PlayerListFunctionArn: !GetAtt PlayerListFunction.Arn
@@ -173,6 +185,7 @@ Resources:
             - Effect: Allow
               Action: lambda:InvokeFunction
               Resource:
+                - !GetAtt EnsureRunNameFunction.Arn
                 - !GetAtt FederationsFunction.Arn
                 - !GetAtt TournamentsFunction.Arn
                 - !GetAtt PlayerListFunction.Arn

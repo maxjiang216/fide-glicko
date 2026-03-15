@@ -21,6 +21,7 @@ IMAGE_HANDLERS = [
 # Only "light" Lambdas (no pandas/pyarrow) - those with pandas have ABI issues when
 # tested with local Python 3.13 vs Lambda 3.12; they are validated by deploy workflow.
 LAMBDA_CONFIGS = [
+    ("EnsureRunNameFunction", "handlers.ensure_run_name"),
     ("FederationsFunction", "handlers.federations"),
     ("TournamentsFunction", "handlers.tournaments"),
     ("SplitIdsFunction", "handlers.split_ids"),

@@ -61,39 +61,75 @@ If you previously deployed with the old shell scripts, the Lambdas and Step Func
 - **8 Lambda functions**: federations, tournaments, player_list, split_ids, details_chunk, reports_chunk, merge_chunks, validate
 - **1 Step Functions state machine**: fide-glicko-pipeline
 
-All Lambdas share the same code package (handlers + `src/scraper`). The Step Function orchestrates the full scraping flow. See [step-function/README.md](step-function/README.md) for pipeline details and run instructions.
+All Lambdas share the same code package (handlers + `src/scraper`). The Step Function orchestrates the full scraping flow.
+
+**Run the pipeline:**
+```bash
+# Get state machine ARN from deploy output (or: aws stepfunctions list-state-machines)
+aws stepfunctions start-execution \
+  --state-machine-arn arn:aws:states:REGION:ACCOUNT:stateMachine:fide-glicko-pipeline \
+  --name "run-$(date +%Y%m%d-%H%M%S)" \
+  --input '{"year": 2025, "month": 3, "run_type": "prod", "bucket": "fide-glicko"}'
+```
+For prod, omit `run_name`; it is derived as `YYYY-MM`. See [step-function/README.md](step-function/README.md) for full input options.
 
 ---
 
 ## S3 Bucket Structure
 
-The `fide-glicko` bucket stores scraped data. Layout:
+The `fide-glicko` bucket stores scraped data. Layout (mirrors `build_run_base` + `build_s3_uri_for_run`):
 
 ```
 s3://fide-glicko/
-├── data/                           # Production data (monthly runs, canonical)
-│   ├── federations.csv             # Shared across all months
-│   ├── players_list.parquet        # Shared, updated periodically
-│   ├── tournament_ids/
-│   │   └── {YYYY_MM}
-│   ├── tournament_details/
-│   │   └── {YYYY_MM}.parquet
-│   ├── tournament_reports/
-│   │   ├── {YYYY_MM}_players.parquet
-│   │   └── {YYYY_MM}_games.parquet
-│   └── validation_reports/
-│       └── {YYYY_MM}.txt
+├── federations/                    # Shared across all run types
+│   └── data/
+│       └── federations_{timestamp}.csv
 │
-└── runs/                           # Dev/test runs (isolated by run_id)
-    └── {run_id}/
-        ├── federations.csv
-        ├── tournament_ids/
-        ├── tournament_details/
-        └── ...
+├── player_lists/                  # Shared across all run types
+│   ├── data/
+│   │   └── player_list_{timestamp}.parquet
+│   ├── raw/
+│   │   └── player_list_{timestamp}.xml.gz
+│   ├── sample/
+│   │   └── player_list_sample_{timestamp}.json
+│   └── reports/
+│       └── player_list_report_{timestamp}.json
+│
+├── prod/                          # Production runs (one per month)
+│   └── {YYYY-MM}/                 # e.g. 2024-01
+│       ├── data/
+│       │   ├── tournament_ids.txt
+│       │   ├── tournament_id_chunks/
+│       │   │   └── chunk_{N}.txt
+│       │   ├── tournament_details_chunks/
+│       │   │   └── chunk_{N}.parquet
+│       │   ├── tournament_reports_chunks/
+│       │   │   ├── chunk_{N}_players.parquet
+│       │   │   └── chunk_{N}_games.parquet
+│       │   ├── tournament_details.parquet
+│       │   ├── tournament_reports_players.parquet
+│       │   └── tournament_reports_games.parquet
+│       ├── sample/
+│       │   └── tournament_ids_sample.json
+│       ├── raw/
+│       │   └── tournaments.json.gz
+│       ├── reports/
+│       │   └── validation_report.json
+│       └── run_metadata.json
+│
+├── custom/                        # Custom/backfill runs (user-named)
+│   └── {run_name}/
+│       └── ...                    # Same structure as prod/{YYYY-MM}
+│
+└── test/                          # Test runs (no run_name subfolder)
+    ├── data/
+    │   └── ...
+    └── ...
 ```
 
-- **`data/`** – Scheduled production runs. Use `run_type: prod`, `run_name: "2024-01"`, etc.
-- **`runs/{run_id}/`** – Dev, test, backfills. Use `run_type: custom` or `test`.
+- **`prod/{YYYY-MM}/`** – Scheduled monthly runs. Pass `run_type: "prod"` with `year` and `month`; `run_name` is derived.
+- **`custom/{run_name}/`** – Dev, backfills. Pass `run_type: "custom"` and `run_name`.
+- **`test/`** – Test runs. Pass `run_type: "test"`; `run_name` defaults to `"test"`.
 
 ## Logs
 

@@ -77,7 +77,7 @@ def test_no_fail_state_uses_cause_dollar() -> None:
 
 
 def test_no_execution_input_refs_to_defaulted_fields() -> None:
-    """ItemSelector must not use $$.Execution.Input for fields defaulted by AddDefaultRunName."""
+    """ItemSelector must not use $$.Execution.Input for fields defaulted by EnsureRunName."""
     definition = _load_pipeline()
     defaulted = _find_defaulted_fields(definition)
     violations = []
