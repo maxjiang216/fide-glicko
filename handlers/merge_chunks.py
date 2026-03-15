@@ -14,8 +14,9 @@ Event shape:
 - bucket: S3 bucket (default: fide-glicko)
 - override: If true, overwrite existing merged files (default: false)
 
-Inputs: {base}/data/tournament_details_chunks/details_chunk_*.parquet,
-        {base}/data/tournament_reports_chunks/reports_chunk_*_players.parquet, reports_chunk_*_games.parquet
+Inputs: {base}/data/tournament_details_chunks/details_chunk_*_of_{n}.parquet,
+        {base}/data/tournament_reports_chunks/reports_chunk_*_of_{n}_players.parquet, reports_chunk_*_of_{n}_games.parquet
+        (n=chunk_count from run_metadata.json)
 Outputs: {base}/data/tournament_details.parquet,
          {base}/data/tournament_reports_players.parquet,
          {base}/data/tournament_reports_games.parquet

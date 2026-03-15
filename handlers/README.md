@@ -53,14 +53,14 @@ All Lambdas accept **run_type**, **run_name**, **bucket**, **override** where ap
   "run_type": "custom",
   "run_name": "2024-01",
   "bucket": "fide-glicko",
-  "chunk_size": 400,
+  "chunk_size": 300,
   "override": false
 }
 ```
 - **run_type**, **run_name**: Used to locate `{base}/data/tournament_ids.txt`. No year/month
   required — paths derive from run folder.
 - **ids_uri**: Optional. Defaults to `{base}/data/tournament_ids.txt`
-- **chunk_size**: default 400
+- **chunk_size**: default 300
 - **chunk_count**: Optional override
 - Returns: `chunks: [{ input_path, output_path, tournament_count, chunk_index }, ...]`
 
@@ -74,9 +74,9 @@ All Lambdas accept **run_type**, **run_name**, **bucket**, **override** where ap
   "override": false
 }
 ```
-- **chunk_index**: Required (0-based). Paths: `{base}/data/tournament_id_chunks/ids_chunk_{i}.txt` → `{base}/data/tournament_details_chunks/details_chunk_{i}.parquet`
+- **chunk_index**: Required (0-based). **chunk_count**: Required. Paths: `{base}/data/tournament_id_chunks/ids_chunk_{i}_of_{n}.txt` → `{base}/data/tournament_details_chunks/details_chunk_{i}_of_{n}.parquet`
 - **override**: If true, overwrite existing output (default: false)
-- **save_raw**: If true, save raw HTML to `{base}/raw/details/details_chunk_{i}.html.gz` (default: false)
+- **save_raw**: If true, save raw HTML to `{base}/raw/details/details_chunk_{i}_of_{n}.html.gz` (default: false)
 - Orchestrator: use `chunk_index` from each split_ids chunk, pass run_type/run_name from state
 
 ### reports_chunk
@@ -90,11 +90,11 @@ All Lambdas accept **run_type**, **run_name**, **bucket**, **override** where ap
   "save_raw": false
 }
 ```
-- **chunk_index**: Required (0-based). Paths: `{base}/data/tournament_id_chunks/ids_chunk_{i}.txt` → `{base}/data/tournament_reports_chunks/reports_chunk_{i}_*.parquet`
+- **chunk_index**: Required (0-based). **chunk_count**: Required. Paths: `{base}/data/tournament_id_chunks/ids_chunk_{i}_of_{n}.txt` → `{base}/data/tournament_reports_chunks/reports_chunk_{i}_of_{n}_*.parquet`
 - **override**: If true, overwrite existing output (default: false)
 - **save_raw**: If true, save raw HTML to `{base}/raw/reports/reports_chunk_{i}.html.gz` (default: false)
-- **details_path**: Optional. Defaults to `{base}/data/tournament_details_chunks/details_chunk_{i}.parquet`
-- Outputs: `reports_chunk_{i}_players.parquet`, `reports_chunk_{i}_games.parquet`; `reports_chunk_{i}_verbose_sample.json`, `reports_chunk_{i}_games_sample.csv`
+- **details_path**: Optional. Defaults to `{base}/data/tournament_details_chunks/details_chunk_{i}_of_{n}.parquet`
+- Outputs: `reports_chunk_{i}_of_{n}_players.parquet`, `reports_chunk_{i}_of_{n}_games.parquet`; `reports_chunk_{i}_of_{n}_verbose_sample.json`, `reports_chunk_{i}_of_{n}_games_sample.csv`
 - Orchestrator: use `chunk_index` from each split_ids chunk, pass run_type/run_name from state
 
 ### merge_chunks
@@ -109,7 +109,7 @@ All Lambdas accept **run_type**, **run_name**, **bucket**, **override** where ap
 - **run_type**, **run_name**: Required (as above). Locates chunk prefixes.
 - **bucket**: default fide-glicko
 - **override**: If true, overwrite existing merged files (default: false)
-- Inputs: `{base}/data/tournament_details_chunks/details_chunk_*.parquet`, `{base}/data/tournament_reports_chunks/reports_chunk_*_players.parquet`, `reports_chunk_*_games.parquet`
+- Inputs: `{base}/data/tournament_details_chunks/details_chunk_*_of_{n}.parquet`, `{base}/data/tournament_reports_chunks/reports_chunk_*_of_{n}_players.parquet`, `reports_chunk_*_of_{n}_games.parquet` (n=chunk_count from run_metadata)
 - Outputs: `{base}/data/tournament_details.parquet`, `{base}/data/tournament_reports_players.parquet`, `{base}/data/tournament_reports_games.parquet`
 - Returns: `details_uri`, `reports_players_uri`, `reports_games_uri`, `details_chunks`, `reports_chunks`
 

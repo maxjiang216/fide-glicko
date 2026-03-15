@@ -46,6 +46,7 @@ def lambda_handler(event: dict, context) -> dict:
     run_type = event.get("run_type", "custom")
     run_name = event.get("run_name")
     chunk_index = event.get("chunk_index")
+    chunk_count = event.get("chunk_count")
     bucket = event.get("bucket", "fide-glicko")
     override = event.get("override", False)
     save_raw = event.get("save_raw", True)
@@ -69,6 +70,12 @@ def lambda_handler(event: dict, context) -> dict:
             "success": False,
             "error": "chunk_index is required",
         }
+    if chunk_count is None:
+        return {
+            "statusCode": 400,
+            "success": False,
+            "error": "chunk_count is required",
+        }
 
     input_path = build_s3_uri_for_run(
         bucket,
@@ -76,7 +83,7 @@ def lambda_handler(event: dict, context) -> dict:
         run_name,
         "data",
         "tournament_id_chunks",
-        f"ids_chunk_{chunk_index}.txt",
+        f"ids_chunk_{chunk_index}_of_{chunk_count}.txt",
     )
     output_path = build_s3_uri_for_run(
         bucket,
@@ -84,7 +91,7 @@ def lambda_handler(event: dict, context) -> dict:
         run_name,
         "data",
         "tournament_reports_chunks",
-        f"reports_chunk_{chunk_index}",
+        f"reports_chunk_{chunk_index}_of_{chunk_count}",
     )
 
     output_sample_json, output_sample_csv = _derive_sample_paths(output_path)
@@ -106,7 +113,7 @@ def lambda_handler(event: dict, context) -> dict:
             run_name,
             "data",
             "tournament_details_chunks",
-            f"details_chunk_{chunk_index}.parquet",
+            f"details_chunk_{chunk_index}_of_{chunk_count}.parquet",
         )
 
     logger.info(
