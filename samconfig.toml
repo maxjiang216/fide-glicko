@@ -1,11 +1,22 @@
 # SAM deploy configuration
 # Override with --config-env <env> for multiple environments
+#
+# resolve_s3=false and resolve_image_repos=false bypass the managed stack
+# (aws-sam-cli-managed-default) to avoid "InitialCreation" errors in CI.
 version = 0.1
 
 [default.deploy.parameters]
 stack_name = "fide-glicko"
-resolve_s3 = true
-resolve_image_repos = true
+resolve_s3 = false
+s3_bucket = "aws-sam-cli-managed-default-samclisourcebucket-2kqs2vt0rs5c"
+resolve_image_repos = false
+image_repositories = [
+  "PlayerListFunction=710271917035.dkr.ecr.us-east-1.amazonaws.com/fideglicko327ae736/playerlistfunctionbe35717crepo",
+  "DetailsChunkFunction=710271917035.dkr.ecr.us-east-1.amazonaws.com/fideglicko327ae736/detailschunkfunction7fddf1b8repo",
+  "ReportsChunkFunction=710271917035.dkr.ecr.us-east-1.amazonaws.com/fideglicko327ae736/reportschunkfunctionce85551erepo",
+  "MergeChunksFunction=710271917035.dkr.ecr.us-east-1.amazonaws.com/fideglicko327ae736/mergechunksfunctione49a84d4repo",
+  "ValidateFunction=710271917035.dkr.ecr.us-east-1.amazonaws.com/fideglicko327ae736/validatefunctioneddf4248repo"
+]
 capabilities = "CAPABILITY_IAM"
 parameter_overrides = []
 confirm_changeset = false
