@@ -118,6 +118,12 @@ def lambda_handler(event: dict, context) -> dict:
             "ids_uri": ids_uri,
         }
 
+    # Include run_type/run_name in each chunk so Map ItemSelector can use them
+    # (Execution.Input may omit run_name when defaulted by AddDefaultRunName)
+    for ch in chunks:
+        ch["run_type"] = run_type
+        ch["run_name"] = run_name or ""
+
     logger.info("Produced %d chunks for details Lambda fan-out", len(chunks))
     return {
         "statusCode": 200,

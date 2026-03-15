@@ -25,12 +25,7 @@ The workflow `.github/workflows/deploy-sam.yml` deploys on push to main when `te
    - Provider URL: `https://token.actions.githubusercontent.com`
    - Audience: `sts.amazonaws.com`
 
-2. **Create role** for GitHub Actions with trust policy for `repo:YOUR_ORG/fide-glicko:*`, then attach permissions for:
-   - CloudFormation (create/update stack)
-   - S3 (deploy artifacts, must include fide-glicko or your deploy bucket)
-   - Lambda (create/update functions)
-   - IAM (create roles for Lambdas and Step Function)
-   - Step Functions (create/update state machine)
+2. **Create role** for GitHub Actions with trust policy for `repo:YOUR_ORG/fide-glicko:*`. For the inline policy, use `github-deploy-policy.json` but replace `__DEPLOY_ROLE_ARN__` with the role's ARN. The workflow syncs this file to the role on every deploy, so the repo remains the source of truth.
 
 3. **GitHub → Settings → Secrets**: Add `AWS_ROLE_ARN` = the role ARN.
 
