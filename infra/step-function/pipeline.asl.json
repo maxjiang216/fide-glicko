@@ -143,7 +143,36 @@
           "Next": "SplitIdsFailed"
         }
       ],
-      "Default": "MapDetailsAndReports"
+      "Default": "CheckMaxConcurrency"
+    },
+
+    "CheckMaxConcurrency": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.max_concurrency",
+          "IsPresent": true,
+          "Next": "MapDetailsAndReports"
+        }
+      ],
+      "Default": "EnsureMaxConcurrency"
+    },
+
+    "EnsureMaxConcurrency": {
+      "Type": "Pass",
+      "Parameters": {
+        "year.$": "$.year",
+        "month.$": "$.month",
+        "run_type.$": "$.run_type",
+        "run_name.$": "$.run_name",
+        "bucket.$": "$.bucket",
+        "override.$": "$.override",
+        "federations.$": "$.federations",
+        "tournaments.$": "$.tournaments",
+        "parallel_split_player.$": "$.parallel_split_player",
+        "max_concurrency": 5
+      },
+      "Next": "MapDetailsAndReports"
     },
 
     "SplitIdsFailed": {
@@ -155,7 +184,7 @@
     "MapDetailsAndReports": {
       "Type": "Map",
       "ItemsPath": "$.parallel_split_player[0].chunks",
-      "MaxConcurrency": 15,
+      "MaxConcurrencyPath": "$.max_concurrency",
       "ItemSelector": {
         "run_type.$": "$$.Map.Item.Value.run_type",
         "run_name.$": "$$.Map.Item.Value.run_name",
