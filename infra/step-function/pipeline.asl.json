@@ -131,7 +131,25 @@
           "Next": "PipelineFailed"
         }
       ],
-      "Next": "MapDetailsAndReports"
+      "Next": "CheckSplitIdsSuccess"
+    },
+
+    "CheckSplitIdsSuccess": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.parallel_split_player[0].success",
+          "BooleanEquals": false,
+          "Next": "SplitIdsFailed"
+        }
+      ],
+      "Default": "MapDetailsAndReports"
+    },
+
+    "SplitIdsFailed": {
+      "Type": "Fail",
+      "Error": "SplitIdsFailed",
+      "Cause.$": "$.parallel_split_player[0].error"
     },
 
     "MapDetailsAndReports": {
