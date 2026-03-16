@@ -118,7 +118,7 @@ def lambda_handler(event: dict, context) -> dict:
     exit_code = run(
         input_path=input_path,
         output_path=output_path,
-        rate_limit=0.5,
+        rate_limit=0.33,
         max_retries=3,
         checkpoint=0,
         quiet=False,

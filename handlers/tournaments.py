@@ -133,12 +133,10 @@ def lambda_handler(event: dict, context) -> dict:
 
     if exit_code != 0:
         logger.error("Tournaments scrape failed with exit code %d", exit_code)
-        return {
-            "statusCode": 500,
-            "success": False,
-            "output_path": ids_uri,
-            "error": "Scrape failed",
-        }
+        raise RuntimeError(
+            f"Tournaments scrape failed for {year}-{month:02d}: one or more federations "
+            "could not be fetched (fail fast)"
+        )
 
     logger.info("Tournaments scrape completed successfully")
     return {

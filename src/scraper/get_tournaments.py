@@ -480,7 +480,7 @@ async def scrape_month(
     federations_path: Path,
     output_path: Union[Path, str],
     output_format: str = "ids",
-    max_concurrency: int = 20,
+    max_concurrency: int = 5,
     json_uri: Optional[str] = None,
     max_retries: int = 3,
     retry_delay: float = 1.0,
@@ -552,24 +552,25 @@ async def scrape_month(
 
     # Simple session - no cookie jar needed, curl works without it
     async with aiohttp.ClientSession() as session:
-        tasks = [
+        coros = [
             fetch_federation_tournaments(
                 session, semaphore, code, name, year, month, max_retries, retry_delay
             )
             for code, name in federations
         ]
+        task_objs = [asyncio.create_task(c) for c in coros]
 
-        # Process results as they complete
-        for coro in asyncio.as_completed(tasks):
+        # Process results as they complete; fail fast on first federation error
+        for fut in asyncio.as_completed(task_objs):
             if _shutdown_requested:
                 logger.warning("Shutdown requested, cancelling remaining tasks...")
-                # Cancel remaining tasks
-                for task in tasks:
-                    if not task.done():
-                        task.cancel()
+                for t in task_objs:
+                    if not t.done():
+                        t.cancel()
+                await asyncio.gather(*task_objs, return_exceptions=True)
                 break
 
-            code, name, tournaments, error, raw_text = await coro
+            code, name, tournaments, error, raw_text = await fut
             processed_count += 1
 
             if raw_tournaments_uri and not error and raw_text:
@@ -582,7 +583,17 @@ async def scrape_month(
 
             if error:
                 errors.append(f"{code} ({name}): {error}")
-                logger.warning(f"{code} ({name}): {error}")
+                logger.error(
+                    "Fail fast: %s (%s): %s - cancelling remaining federation requests",
+                    code,
+                    name,
+                    error,
+                )
+                for t in task_objs:
+                    if not t.done():
+                        t.cancel()
+                await asyncio.gather(*task_objs, return_exceptions=True)
+                break
             else:
                 federation_counts[code] = len(tournaments)
                 if tournaments:
@@ -718,7 +729,7 @@ def run(
     federations_s3_uri: Optional[str] = None,
     override: bool = False,
     quiet: bool = False,
-    max_concurrency: int = 20,
+    max_concurrency: int = 5,
     ids_uri: Optional[str] = None,
     json_uri: Optional[str] = None,
 ) -> int:
@@ -850,8 +861,8 @@ def main() -> int:
         "--concurrency",
         "-c",
         type=int,
-        default=10,
-        help="Maximum number of concurrent requests (default: 10)",
+        default=5,
+        help="Maximum number of concurrent requests (default: 5)",
     )
     parser.add_argument(
         "--max-retries",

@@ -164,7 +164,7 @@
         "federations.$": "$.federations",
         "tournaments.$": "$.tournaments",
         "parallel_split_player.$": "$.parallel_split_player",
-        "max_concurrency": 10
+        "max_concurrency": 5
       },
       "Next": "MapDetailsAndReports"
     },

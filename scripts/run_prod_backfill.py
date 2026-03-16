@@ -174,8 +174,8 @@ def main() -> int:
     parser.add_argument(
         "--max-concurrency",
         type=int,
-        default=8,
-        help="Map state concurrency per execution (default: 8)",
+        default=5,
+        help="Map state concurrency per execution (default: 5)",
     )
     parser.add_argument(
         "--chunk-size",

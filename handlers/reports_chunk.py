@@ -139,7 +139,7 @@ def lambda_handler(event: dict, context) -> dict:
         input_path=input_path,
         output_path=output_path,
         details_path=details_path,
-        rate_limit=0,
+        rate_limit=0.5,
         quiet=False,
         save_raw=save_raw,
         output_sample_json=output_sample_json,
