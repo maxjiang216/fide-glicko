@@ -7,6 +7,7 @@ import pytest
 import requests
 
 from get_tournament_reports import (
+    ERROR_REPORT_UPDATED_OR_REPLACED,
     extract_forfeit_indicator,
     fetch_tournament_report,
     flatten_result,
@@ -518,6 +519,28 @@ class TestFixtureBasedParsing:
         assert set([g["white_id"], g["black_id"]]) == {"2093596", "24126055"}
         # Niemann won (forfeit +), so if Niemann was white: white_score=1.0, else 0.0
         assert g["white_score"] in (0.0, 1.0)
+
+    def test_report_updated_or_replaced_returns_skip_error(self):
+        """
+        When page has "Tournament report was updated or replaced", return error
+        report_updated_or_replaced (no cross table). These tournaments are skipped.
+        """
+        fixture_path = (
+            Path(__file__).parent / "fixtures" / "report_updated_or_replaced_34330.html"
+        )
+        fixture_html = fixture_path.read_bytes()
+
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.content = fixture_html
+
+        session = MagicMock()
+        session.get.return_value = mock_response
+
+        report, error, _, _ = fetch_tournament_report("34330", session)
+
+        assert report is None
+        assert error == ERROR_REPORT_UPDATED_OR_REPLACED
 
     @pytest.mark.online
     def test_live_fetch_matches_fixture(self):

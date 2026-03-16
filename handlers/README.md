@@ -94,7 +94,7 @@ All Lambdas accept **run_type**, **run_name**, **bucket**, **override** where ap
 - **override**: If true, overwrite existing output (default: false)
 - **save_raw**: If true, save raw HTML to `{base}/raw/reports/reports_chunk_{i}.html.gz` (default: false)
 - **details_path**: Optional. Defaults to `{base}/data/tournament_details_chunks/details_chunk_{i}_of_{n}.parquet`
-- Outputs: `reports_chunk_{i}_of_{n}_players.parquet`, `reports_chunk_{i}_of_{n}_games.parquet`; `reports_chunk_{i}_of_{n}_verbose_sample.json`, `reports_chunk_{i}_of_{n}_games_sample.csv`
+- Outputs: `reports_chunk_{i}_of_{n}_players.parquet`, `reports_chunk_{i}_of_{n}_games.parquet`; `reports_chunk_{i}_of_{n}_verbose_sample.json`, `reports_chunk_{i}_of_{n}_games_sample.csv`; `{base}/reports/reports_chunk_{i}_of_{n}_skipped.json` when any tournaments have no original report (updated/replaced)
 - Orchestrator: use `chunk_index` from each split_ids chunk, pass run_type/run_name from state
 
 ### merge_chunks

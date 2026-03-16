@@ -2,9 +2,8 @@
 """
 Run FIDE pipeline Step Function for multiple prod months with controlled concurrency.
 
-Starts executions for each month in [start, end], limiting concurrent runs.
-Polls status and starts new executions when slots open. Logs progress and
-time estimates.
+Starts executions for each month in [start, end] that exists in FIDE's periods API.
+Limits concurrent runs, polls status, and starts new executions when slots open.
 
 Example:
   uv run scripts/run_prod_backfill.py --start 2024-01 --end 2024-12
@@ -23,7 +22,12 @@ from datetime import datetime, timezone
 from typing import Iterator
 
 import boto3
+import requests
 from botocore.exceptions import ClientError
+
+# FIDE periods API (same as pipeline_historical); RUS has long history
+PERIODS_URL = "https://ratings.fide.com/a_tournaments_panel.php"
+REFERENCE_FED = "RUS"
 
 logging.basicConfig(
     level=logging.INFO,
@@ -69,6 +73,37 @@ def month_range(
         if m > 12:
             m = 1
             y += 1
+
+
+def fetch_available_periods() -> list[tuple[int, int]]:
+    """
+    Fetch available (year, month) from FIDE periods API.
+    Returns empty list on failure (caller falls back to unfiltered range).
+    """
+    url = f"{PERIODS_URL}?country={REFERENCE_FED}&periods_tab=1"
+    headers = {"X-Requested-With": "XMLHttpRequest"}
+    try:
+        resp = requests.get(url, headers=headers, timeout=15)
+        if resp.status_code != 200:
+            return []
+        data = resp.json()
+    except Exception:
+        return []
+
+    periods: list[tuple[int, int]] = []
+    for item in data:
+        pub = item.get("frl_publish", "")
+        if not pub:
+            continue
+        parts = pub.split("-")
+        if len(parts) >= 2:
+            try:
+                y, m = int(parts[0]), int(parts[1])
+                if 1 <= m <= 12:
+                    periods.append((y, m))
+            except ValueError:
+                continue
+    return list(set(periods))  # dedupe
 
 
 @dataclass
@@ -139,8 +174,8 @@ def main() -> int:
     parser.add_argument(
         "--max-concurrency",
         type=int,
-        default=10,
-        help="Map state concurrency per execution (default: 10)",
+        default=8,
+        help="Map state concurrency per execution (default: 8)",
     )
     parser.add_argument(
         "--chunk-size",
@@ -160,12 +195,48 @@ def main() -> int:
         return 1
 
     try:
-        months = list(month_range(args.start, args.end))
+        range_months = list(month_range(args.start, args.end))
     except ValueError as e:
         logger.error("%s", e)
         return 1
-    if not months:
+    if not range_months:
         logger.error("No months in range")
+        return 1
+
+    # Fetch FIDE periods and intersect with range; fall back to range if fetch fails
+    available = set(fetch_available_periods())
+    if available:
+        today = datetime.now(timezone.utc).date()
+        months = [
+            (y, m)
+            for (y, m) in range_months
+            if (y, m) in available
+            and (y < today.year or (y == today.year and m <= today.month))
+        ]
+        if months != range_months:
+            excluded = set(range_months) - set(months)
+            logger.info(
+                "FIDE periods: %d in range, %d excluded (not in FIDE or future)",
+                len(months),
+                len(excluded),
+            )
+    else:
+        logger.warning(
+            "Could not fetch FIDE periods; using full range without period filter"
+        )
+        today = datetime.now(timezone.utc).date()
+        months = [
+            (y, m)
+            for (y, m) in range_months
+            if y < today.year or (y == today.year and m <= today.month)
+        ]
+
+    if not months:
+        logger.error(
+            "No months to run (range %04d-%02d to %04d-%02d; none in FIDE periods)",
+            *args.start,
+            *args.end,
+        )
         return 1
 
     logger.info(

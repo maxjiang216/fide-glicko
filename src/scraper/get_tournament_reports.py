@@ -511,6 +511,18 @@ def fetch_tournament_report(
 
             soup = BeautifulSoup(response.content, "html.parser")
 
+            # Older tournaments may have no original report (no cross table).
+            # Page shows: "Tournament report was updated or replaced, please view
+            # Tournament Details for more information." Skip these.
+            page_text = soup.get_text() if soup else ""
+            if "Tournament report was updated or replaced" in page_text:
+                return (
+                    None,
+                    ERROR_REPORT_UPDATED_OR_REPLACED,
+                    len(attempt_times),
+                    response.content if return_raw else None,
+                )
+
             # Extract "Start: YYYY-MM-DD" from report header for date format inference
             report_start_iso = None
             calc_body = soup.find("div", id="calc_list") or soup
@@ -1269,6 +1281,19 @@ def _write_parquet_to_path(df: pd.DataFrame, path: str) -> None:
     _write_to_path(path, buf.getvalue())
 
 
+ERROR_REPORT_UPDATED_OR_REPLACED = "report_updated_or_replaced"
+
+
+def save_skipped_json(skipped: List[Dict], base_path: str) -> None:
+    """Save tournaments skipped (no original report) to JSON for reporting."""
+    if not skipped:
+        return
+    path = base_path.rstrip("/") + "_skipped.json"
+    content = json.dumps(skipped, indent=2, ensure_ascii=False)
+    _write_to_path(path, content)
+    logger.info("Saved %d skipped (no original report) to %s", len(skipped), path)
+
+
 def save_players_parquet(results: List[Dict], parquet_path: str):
     """Save players Parquet. PK: (player_id, tournament_id)."""
     try:
@@ -1410,6 +1435,7 @@ def run(
     save_raw: bool = True,
     output_sample_json: Optional[str] = None,
     output_sample_csv: Optional[str] = None,
+    output_reports_base: Optional[str] = None,
 ) -> int:
     """
     Scrape tournament reports for codes from input_path, write to output_path.
@@ -1425,6 +1451,7 @@ def run(
         save_raw: If True, save concatenated raw HTML to raw/reports/reports_chunk_{i}.html.gz.
         output_sample_json: Optional path for verbose JSON sample (tournaments with players/rounds).
         output_sample_csv: Optional path for CSV sample from games parquet.
+        output_reports_base: Optional base path for reports (e.g. skipped tournaments JSON).
 
     Returns:
         0 on success, 1 on failure.
@@ -1496,6 +1523,9 @@ def run(
     raw_accumulator: List[Tuple[str, bytes]] = []  # (code, html)
 
     all_results: List[Dict] = []
+    skipped_reports: List[Dict] = (
+        []
+    )  # Tournaments with no original report (updated/replaced)
     success_count = 0
     current_codes = codes
 
@@ -1521,6 +1551,15 @@ def run(
 
         result = {"tournament_code": code}
         if report is None:
+            if error == ERROR_REPORT_UPDATED_OR_REPLACED:
+                # No original report (page says "updated or replaced") - skip, record
+                result["success"] = False
+                result["error"] = error
+                skipped_reports.append({"tournament_code": code, "error": error})
+                all_results.append(result)
+                if pbar:
+                    pbar.update(1)
+                continue
             raise RuntimeError(
                 f"Report fetch failed for tournament {code}: {error or 'unknown'}; "
                 "aborting chunk so Step Function can retry with fresh Lambda"
@@ -1553,6 +1592,9 @@ def run(
 
     save_players_parquet(all_results, players_path)
     save_games_parquet(all_results, games_path, details_map=details_map)
+
+    if output_reports_base and skipped_reports:
+        save_skipped_json(skipped_reports, output_reports_base)
 
     if output_sample_json:
         save_verbose_json_sample(
