@@ -21,6 +21,8 @@ Event shape:
 - details_path: Optional S3 URI to details chunk parquet for date inference.
 
 Outputs: parquet, plus reports_chunk_{i}_verbose_sample.json and reports_chunk_{i}_games_sample.csv.
+When tournaments have no original report (page says "updated or replaced"), writes
+reports_chunk_{i}_skipped.json to reports/.
 """
 
 import logging
@@ -32,12 +34,21 @@ from get_tournament_reports import run
 logger = logging.getLogger(__name__)
 
 
-def _derive_sample_paths(output_path: str) -> tuple[str, str]:
-    """Derive sample JSON and CSV paths from output_path (data/ -> sample/)."""
+def _derive_sample_and_reports_paths(output_path: str) -> tuple[str, str, str | None]:
+    """
+    Derive sample JSON, CSV, and reports base from output_path.
+    output_path should contain /data/ (e.g. .../data/tournament_reports_chunks/reports_chunk_0).
+    Returns (sample_json, sample_csv, reports_base) or ("", "", None) if /data/ not present.
+    """
     if "/data/" not in output_path:
-        return "", ""
+        return "", "", None
     sample_base = output_path.replace("/data/", "/sample/", 1)
-    return sample_base + "_verbose_sample.json", sample_base + "_games_sample.csv"
+    reports_base = output_path.replace("/data/", "/reports/", 1)
+    return (
+        sample_base + "_verbose_sample.json",
+        sample_base + "_games_sample.csv",
+        reports_base,
+    )
 
 
 def lambda_handler(event: dict, context) -> dict:
@@ -94,7 +105,9 @@ def lambda_handler(event: dict, context) -> dict:
         f"reports_chunk_{chunk_index}_of_{chunk_count}",
     )
 
-    output_sample_json, output_sample_csv = _derive_sample_paths(output_path)
+    output_sample_json, output_sample_csv, output_reports_base = (
+        _derive_sample_and_reports_paths(output_path)
+    )
 
     games_uri = output_path + "_games.parquet"
     if not override and output_exists(games_uri):
@@ -131,6 +144,7 @@ def lambda_handler(event: dict, context) -> dict:
         save_raw=save_raw,
         output_sample_json=output_sample_json,
         output_sample_csv=output_sample_csv,
+        output_reports_base=output_reports_base,
     )
 
     if exit_code != 0:
