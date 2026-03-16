@@ -65,7 +65,7 @@ aws stepfunctions start-execution \
 - **run_name** – For prod: omit (derived as `YYYY-MM`). For custom: required (e.g. `"backfill-2024-06"`). For test: optional (default `"test"`)
 - **bucket** – S3 bucket (default: fide-glicko)
 - **override** – if true, refetch/overwrite even when cached (default: false)
-- **max_concurrency** – Map state parallelism for chunk processing (default: 10)
+- **max_concurrency** – Map state parallelism for chunk processing (default: 5)
 - **chunk_size** – optional; default 300
 
 ## Check status

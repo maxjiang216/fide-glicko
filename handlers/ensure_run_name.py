@@ -13,7 +13,7 @@ Event shape (passthrough from execution input):
     "run_name": null,
     "bucket": "fide-glicko",
     "override": false,
-    "max_concurrency": 10,
+    "max_concurrency": 5,
     "chunk_size": 300
 }
 
