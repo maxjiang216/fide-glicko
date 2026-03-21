@@ -39,13 +39,17 @@ All Lambdas accept **run_type**, **run_name**, **bucket**, **override** where ap
   "run_type": "prod",
   "run_name": "2025-03",
   "bucket": "fide-glicko",
-  "override": false
+  "override": false,
+  "tournaments_max_concurrency": null
 }
 ```
 - **year**, **month**: Required
 - **run_type**, **run_name**: run_name comes from EnsureRunName (prod: YYYY-MM; custom: user-provided)
 - **federations_s3_uri**: Optional. Defaults to latest in `{bucket}/federations/data/`
+- **tournaments_max_concurrency**: Optional. Parallel federation HTTP requests (default `1` when omitted/null). Increase (e.g. `3`–`5`) if the step fails with **Sandbox.Timedout** at **900s** (Lambda hard limit). Lower values reduce burst load on FIDE from AWS.
 - Outputs: `{base}/data/tournament_ids.txt`, `{base}/sample/tournament_ids_sample.json`, `{base}/raw/tournaments.json.gz` (raw API JSON, all federations concatenated, gzip-9)
+
+**Tournaments step & 900s timeout:** One Lambda invocation must finish all federations (~200). Standard Lambdas cannot run longer than **900 seconds**. CloudWatch logs include `projected_total_s`, `lambda_remaining_ms`, and warnings when the scrape is on track to exceed the limit. Mitigations: raise **tournaments_max_concurrency** (faster wall clock, more FIDE load), or split work across multiple runs (e.g. custom federation subsets — not built in). For very slow FIDE responses, **merge** / **ECS** would be a larger architectural change.
 
 ### split_ids
 ```json
@@ -94,6 +98,7 @@ All Lambdas accept **run_type**, **run_name**, **bucket**, **override** where ap
 - **override**: If true, overwrite existing output (default: false)
 - **save_raw**: If true, save raw HTML to `{base}/raw/reports/reports_chunk_{i}.html.gz` (default: false)
 - **details_path**: Optional. Defaults to `{base}/data/tournament_details_chunks/details_chunk_{i}_of_{n}.parquet`
+- **Rate limit**: Fixed **0.33 requests/s** to FIDE per chunk (reduces load when Map runs multiple chunks in parallel).
 - Outputs: `reports_chunk_{i}_of_{n}_players.parquet`, `reports_chunk_{i}_of_{n}_games.parquet`; `reports_chunk_{i}_of_{n}_verbose_sample.json`, `reports_chunk_{i}_of_{n}_games_sample.csv`; `{base}/reports/reports_chunk_{i}_of_{n}_skipped.json` when any tournaments have no original report (updated/replaced)
 - Orchestrator: use `chunk_index` from each split_ids chunk, pass run_type/run_name from state
 

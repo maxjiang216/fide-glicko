@@ -162,7 +162,7 @@ python src/scraper/get_federations.py --override
 | `--federations` | `-f` | `data/federations.csv` | Path to federations CSV file (relative to repo root) |
 | `--output` | `-o` | `data/tournament_ids/YYYY_MM` | Output file path (relative to repo root) |
 | `--format` | | `ids` | Output format: `ids` for just IDs, `json` for full tournament data |
-| `--concurrency` | `-c` | `10` | Maximum number of concurrent requests |
+| `--concurrency` | `-c` | `1` | Maximum concurrent requests (default 1 for FIDE; raise locally if needed) |
 | `--max-retries` | `-r` | `3` | Maximum number of retries per federation |
 | `--retry-delay` | | `1.0` | Base delay in seconds between retries |
 | `--quiet` | `-q` | `False` | Disable verbose output |
@@ -173,8 +173,8 @@ python src/scraper/get_federations.py --override
 # Scrape tournaments for January 2025
 python src/scraper/get_tournaments.py --year 2025 --month 1
 
-# Higher concurrency for faster scraping
-python src/scraper/get_tournaments.py --year 2025 --month 1 --concurrency 20
+# Higher concurrency for faster scraping (local only; Lambda default is 1)
+python src/scraper/get_tournaments.py --year 2025 --month 1 --concurrency 10
 
 # Custom federations file and output path
 python src/scraper/get_tournaments.py --year 2025 --month 1 --federations custom_data/federations.csv --output custom_data/tournaments.txt

@@ -51,4 +51,7 @@ def lambda_handler(event: dict, context) -> dict:
     out.setdefault("bucket", "fide-glicko")
     out.setdefault("override", False)
     out.setdefault("chunk_size", 300)
+    # Optional; Tournaments Lambda uses default 1 if null (avoid JSONPath missing-key errors)
+    if "tournaments_max_concurrency" not in out:
+        out["tournaments_max_concurrency"] = None
     return out
