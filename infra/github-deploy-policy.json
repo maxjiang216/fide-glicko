@@ -110,6 +110,8 @@
         "ecr:CreateRepository",
         "ecr:DescribeRepositories",
         "ecr:DescribeImages",
+        "ecr:GetLifecyclePolicy",
+        "ecr:PutLifecyclePolicy",
         "ecr:BatchCheckLayerAvailability",
         "ecr:InitiateLayerUpload",
         "ecr:UploadLayerPart",
