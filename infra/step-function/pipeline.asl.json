@@ -165,6 +165,10 @@
         "federations.$": "$.federations",
         "tournaments.$": "$.tournaments",
         "parallel_split_player.$": "$.parallel_split_player",
+        "chunk_size.$": "$.chunk_size",
+        "tournaments_max_concurrency.$": "$.tournaments_max_concurrency",
+        "details_rate_limit.$": "$.details_rate_limit",
+        "reports_rate_limit.$": "$.reports_rate_limit",
         "max_concurrency": 5
       },
       "Next": "MapDetailsAndReports"
@@ -186,7 +190,9 @@
         "chunk_index.$": "$$.Map.Item.Value.chunk_index",
         "chunk_count.$": "$$.Map.Item.Value.chunk_count",
         "bucket.$": "$$.Execution.Input.bucket",
-        "override.$": "$$.Execution.Input.override"
+        "override.$": "$$.Execution.Input.override",
+        "details_rate_limit.$": "$.details_rate_limit",
+        "reports_rate_limit.$": "$.reports_rate_limit"
       },
       "Iterator": {
         "StartAt": "DetailsChunk",
@@ -200,7 +206,8 @@
               "chunk_index.$": "$.chunk_index",
               "chunk_count.$": "$.chunk_count",
               "bucket.$": "$.bucket",
-              "override.$": "$.override"
+              "override.$": "$.override",
+              "details_rate_limit.$": "$.details_rate_limit"
             },
             "ResultPath": "$.details_result",
             "Retry": [
@@ -246,7 +253,8 @@
               "chunk_count.$": "$.chunk_count",
               "bucket.$": "$.bucket",
               "override.$": "$.override",
-              "save_raw": true
+              "save_raw": true,
+              "reports_rate_limit.$": "$.reports_rate_limit"
             },
             "Retry": [
               {

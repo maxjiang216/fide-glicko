@@ -32,7 +32,10 @@ uv run scripts/run_prod_backfill.py --start 2024-01 --end 2024-03 --dry-run
 | `--bucket` | S3 bucket (default: fide-glicko). |
 | `--override` | Pass override=true to pipeline. |
 | `--max-concurrency` | Map concurrency per execution (default: 5). |
-| `--chunk-size` | Max tournaments per chunk (default: 300). |
+| `--tournaments-max-concurrency` | Tournaments step: parallel federation requests (omit = 1). |
+| `--chunk-size` | Max tournaments per chunk (omit = 300 or SSM default). |
+| `--details-rate-limit` | Details chunk FIDE req/s (omit = SSM or pipeline default). |
+| `--reports-rate-limit` | Reports chunk FIDE req/s (omit = SSM or pipeline default). |
 | `--dry-run` | List months without starting. |
 
 ## run_full_pipeline.py

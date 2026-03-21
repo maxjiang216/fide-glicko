@@ -8,6 +8,14 @@ Parameters:
     Default: fide-glicko
     Description: S3 bucket for scraped data and Lambda deployment artifacts
 
+  PipelineConfigSsmParam:
+    Type: String
+    Default: /fide-glicko/pipeline/config
+    Description: >
+      SSM String parameter name (JSON object) for pipeline tuning. Create or edit
+      in AWS Console (Parameter Store) without redeploying. Omitted execution
+      input keys are filled from this object; see infra/step-function/README.md.
+
 Globals:
   Function:
     Timeout: 60
@@ -26,6 +34,15 @@ Resources:
       Timeout: 10
       MemorySize: 128
       Description: Normalize run_name for pipeline (prod=YYYY-MM, custom=required, test=default)
+      Environment:
+        Variables:
+          PIPELINE_CONFIG_SSM_PARAM: !Ref PipelineConfigSsmParam
+      Policies:
+        - Statement:
+            - Effect: Allow
+              Action:
+                - ssm:GetParameter
+              Resource: !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${PipelineConfigSsmParam}
 
   FederationsFunction:
     Type: AWS::Serverless::Function
@@ -35,7 +52,7 @@ Resources:
       CodeUri: .functions/federations
       Handler: handlers.federations.lambda_handler
       Timeout: 60
-      MemorySize: 256
+      MemorySize: 128
       Policies:
         - S3CrudPolicy:
             BucketName: !Ref DataBucket
@@ -68,7 +85,7 @@ Resources:
         Command:
           - handlers.player_list.lambda_handler
       Timeout: 300
-      MemorySize: 3008
+      MemorySize: 2560
       Policies:
         - S3CrudPolicy:
             BucketName: !Ref DataBucket

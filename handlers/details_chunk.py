@@ -17,6 +17,7 @@ Event shape:
 - bucket: S3 bucket (default: fide-glicko)
 - override: If true, overwrite existing output (default: false)
 - save_raw: If true, save raw HTML to raw/details/details_chunk_{i}.html.gz (default: true)
+- details_rate_limit: Requests per second to FIDE (default: 0.33; 0 = unlimited)
 """
 
 import logging
@@ -26,6 +27,17 @@ from s3_io import build_s3_uri_for_run, output_exists
 from get_tournament_details import run
 
 logger = logging.getLogger(__name__)
+
+
+def _rate_limit_req_s(event: dict, key: str, default: float) -> float:
+    v = event.get(key, default)
+    if v is None:
+        return default
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return default
+    return f if f >= 0 else default
 
 
 def _derive_sample_and_reports_paths(output_path: str) -> tuple[str | None, str | None]:
@@ -52,6 +64,7 @@ def lambda_handler(event: dict, context) -> dict:
     bucket = event.get("bucket", "fide-glicko")
     override = event.get("override", False)
     save_raw = event.get("save_raw", True)
+    rate_limit = _rate_limit_req_s(event, "details_rate_limit", 0.33)
 
     if run_type not in ("prod", "custom", "test"):
         return {
@@ -118,7 +131,7 @@ def lambda_handler(event: dict, context) -> dict:
     exit_code = run(
         input_path=input_path,
         output_path=output_path,
-        rate_limit=0.33,
+        rate_limit=rate_limit,
         max_retries=3,
         checkpoint=0,
         quiet=False,

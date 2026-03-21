@@ -19,8 +19,7 @@ Event shape:
 - override: If true, overwrite existing output (default: false)
 - save_raw: If true, save raw HTML to raw/reports/reports_chunk_{i}.html.gz (default: true)
 - details_path: Optional S3 URI to details chunk parquet for date inference.
-
-Rate limit: **0.33 req/s** to FIDE (same order of magnitude as details_chunk; lowers burst vs unlimited).
+- reports_rate_limit: Requests per second to FIDE (default: 0.33; 0 = unlimited)
 
 Outputs: parquet, plus reports_chunk_{i}_verbose_sample.json and reports_chunk_{i}_games_sample.csv.
 When tournaments have no original report (page says "updated or replaced"), writes
@@ -34,6 +33,17 @@ from s3_io import build_s3_uri_for_run, output_exists
 from get_tournament_reports import run
 
 logger = logging.getLogger(__name__)
+
+
+def _rate_limit_req_s(event: dict, key: str, default: float) -> float:
+    v = event.get(key, default)
+    if v is None:
+        return default
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return default
+    return f if f >= 0 else default
 
 
 def _derive_sample_and_reports_paths(output_path: str) -> tuple[str, str, str | None]:
@@ -64,6 +74,7 @@ def lambda_handler(event: dict, context) -> dict:
     override = event.get("override", False)
     save_raw = event.get("save_raw", True)
     details_path = event.get("details_path")
+    rate_limit = _rate_limit_req_s(event, "reports_rate_limit", 0.33)
 
     if run_type not in ("prod", "custom", "test"):
         return {
@@ -141,7 +152,7 @@ def lambda_handler(event: dict, context) -> dict:
         input_path=input_path,
         output_path=output_path,
         details_path=details_path,
-        rate_limit=0.33,
+        rate_limit=rate_limit,
         quiet=False,
         save_raw=save_raw,
         output_sample_json=output_sample_json,

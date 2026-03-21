@@ -8,7 +8,7 @@ Orchestrates the full scraping flow: ensure_run_name → federations → tournam
 1. **Federations** – fetch federation list (shared across runs)
 2. **Tournaments** – fetch tournament IDs per federation
 3. **Parallel** – split_ids and player_list run in parallel (neither depends on the other)
-4. **Map** – each chunk runs details_chunk then reports_chunk (sequential per chunk; MaxConcurrency configurable via input, default 10)
+4. **Map** – each chunk runs details_chunk then reports_chunk (sequential per chunk; MaxConcurrency configurable via input or SSM, default 5)
 5. **MergeChunks** – combine parquet outputs
 6. **Validate** – run validation report
 
@@ -67,6 +67,35 @@ aws stepfunctions start-execution \
 - **override** – if true, refetch/overwrite even when cached (default: false)
 - **max_concurrency** – Map state parallelism for chunk processing (default: 5)
 - **chunk_size** – optional; default 300
+- **tournaments_max_concurrency** – optional parallel federation requests in the tournaments step (default: 1)
+- **details_rate_limit** – requests per second to FIDE for details chunks (default: 0.33; `0` = unlimited)
+- **reports_rate_limit** – requests per second to FIDE for reports chunks (default: 0.33; `0` = unlimited)
+
+### Semi-permanent defaults (SSM, no redeploy)
+
+The **EnsureRunName** Lambda (only when invoked by Step Functions in AWS) reads a JSON object from **Systems Manager → Parameter Store** so you can tune defaults in the AWS Console (or CLI) without a Git commit. **SSM is not read** when running handlers locally or when building execution input from scripts such as `scripts/run_prod_backfill.py`—pass keys in `--input` / CLI flags instead. Stack parameter **`PipelineConfigSsmParam`** (default: `/fide-glicko/pipeline/config`) sets the parameter **name**; create the String parameter once if it does not exist.
+
+**Precedence:** execution input (above) overrides SSM; SSM overrides code defaults.
+
+Example parameter value:
+
+```json
+{
+  "chunk_size": 300,
+  "max_concurrency": 5,
+  "tournaments_max_concurrency": 2,
+  "details_rate_limit": 0.33,
+  "reports_rate_limit": 0.33
+}
+```
+
+Omit a key from the JSON to fall back to code defaults for that key. Omit a key from **both** the execution input and the JSON to use the code default.
+
+```bash
+aws ssm put-parameter --name /fide-glicko/pipeline/config --type String \
+  --value '{"chunk_size":200,"max_concurrency":8,"details_rate_limit":0.4,"reports_rate_limit":0.3}' \
+  --overwrite
+```
 
 ## Check status
 
