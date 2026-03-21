@@ -8,6 +8,7 @@ Limits concurrent runs, polls status, and starts new executions when slots open.
 Example:
   uv run scripts/run_prod_backfill.py --start 2024-01 --end 2024-12
   uv run scripts/run_prod_backfill.py --start 2024-01 --end 2024-06 --concurrency 2
+  uv run scripts/run_prod_backfill.py --start 2024-01 --end 2024-03 --details-rate-limit 0.4 --reports-rate-limit 0.3
 
 Requires AWS credentials (e.g. aws configure). Uses default region unless --region.
 """
@@ -192,6 +193,20 @@ def main() -> int:
         help="Max tournaments per chunk (default: 300; use smaller if reports_chunk times out)",
     )
     parser.add_argument(
+        "--details-rate-limit",
+        type=float,
+        default=None,
+        metavar="REQ_PER_S",
+        help="Details chunk: FIDE requests per second (omit to use SSM or pipeline default)",
+    )
+    parser.add_argument(
+        "--reports-rate-limit",
+        type=float,
+        default=None,
+        metavar="REQ_PER_S",
+        help="Reports chunk: FIDE requests per second (omit to use SSM or pipeline default)",
+    )
+    parser.add_argument(
         "--dry-run",
         action="store_true",
         help="Print months that would run, do not start",
@@ -292,6 +307,10 @@ def main() -> int:
             input_dict["chunk_size"] = args.chunk_size
         if args.tournaments_max_concurrency is not None:
             input_dict["tournaments_max_concurrency"] = args.tournaments_max_concurrency
+        if args.details_rate_limit is not None:
+            input_dict["details_rate_limit"] = args.details_rate_limit
+        if args.reports_rate_limit is not None:
+            input_dict["reports_rate_limit"] = args.reports_rate_limit
         try:
             resp = client.start_execution(
                 stateMachineArn=arn,

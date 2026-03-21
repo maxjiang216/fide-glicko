@@ -17,6 +17,7 @@ All Lambdas accept **run_type**, **run_name**, **bucket**, **override** where ap
 }
 ```
 - Normalizes `run_name` before pipeline: prod = `{year}-{month:02d}`, custom = required, test = `"test"`
+- In **Lambda only**, merges optional keys from SSM (`PIPELINE_CONFIG_SSM_PARAM`) when omitted from input (see [step-function README](../infra/step-function/README.md)).
 - Returns full passthrough with `run_name` set. Called first by the Step Function.
 
 ### federations
@@ -75,11 +76,13 @@ All Lambdas accept **run_type**, **run_name**, **bucket**, **override** where ap
   "run_name": "2024-01",
   "chunk_index": 0,
   "bucket": "fide-glicko",
-  "override": false
+  "override": false,
+  "details_rate_limit": 0.33
 }
 ```
 - **chunk_index**: Required (0-based). **chunk_count**: Required. Paths: `{base}/data/tournament_id_chunks/ids_chunk_{i}_of_{n}.txt` → `{base}/data/tournament_details_chunks/details_chunk_{i}_of_{n}.parquet`
 - **override**: If true, overwrite existing output (default: false)
+- **details_rate_limit**: FIDE requests per second (default **0.33**; **0** = unlimited). Set on execution input / SSM (Lambda) or pass from Step Functions state.
 - **save_raw**: If true, save raw HTML to `{base}/raw/details/details_chunk_{i}_of_{n}.html.gz` (default: false)
 - Orchestrator: use `chunk_index` from each split_ids chunk, pass run_type/run_name from state
 
@@ -91,14 +94,15 @@ All Lambdas accept **run_type**, **run_name**, **bucket**, **override** where ap
   "chunk_index": 0,
   "bucket": "fide-glicko",
   "override": false,
-  "save_raw": false
+  "save_raw": false,
+  "reports_rate_limit": 0.33
 }
 ```
 - **chunk_index**: Required (0-based). **chunk_count**: Required. Paths: `{base}/data/tournament_id_chunks/ids_chunk_{i}_of_{n}.txt` → `{base}/data/tournament_reports_chunks/reports_chunk_{i}_of_{n}_*.parquet`
 - **override**: If true, overwrite existing output (default: false)
 - **save_raw**: If true, save raw HTML to `{base}/raw/reports/reports_chunk_{i}.html.gz` (default: false)
 - **details_path**: Optional. Defaults to `{base}/data/tournament_details_chunks/details_chunk_{i}_of_{n}.parquet`
-- **Rate limit**: Fixed **0.33 requests/s** to FIDE per chunk (reduces load when Map runs multiple chunks in parallel).
+- **reports_rate_limit**: FIDE requests per second (default **0.33**; **0** = unlimited). Set on execution input / SSM (Lambda) or pass from Step Functions state.
 - Outputs: `reports_chunk_{i}_of_{n}_players.parquet`, `reports_chunk_{i}_of_{n}_games.parquet`; `reports_chunk_{i}_of_{n}_verbose_sample.json`, `reports_chunk_{i}_of_{n}_games_sample.csv`; `{base}/reports/reports_chunk_{i}_of_{n}_skipped.json` when any tournaments have no original report (updated/replaced)
 - Orchestrator: use `chunk_index` from each split_ids chunk, pass run_type/run_name from state
 
