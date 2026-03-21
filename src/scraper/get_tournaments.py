@@ -19,7 +19,7 @@ import tempfile
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Optional, Tuple, Union
+from typing import Any, List, Optional, Tuple, Union
 
 import aiohttp
 
@@ -43,6 +43,23 @@ logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
 )
 logger = logging.getLogger(__name__)
+
+# Lambda hard timeout (ms) — standard functions max at 15 minutes
+_LAMBDA_MAX_MS = 900_000
+
+
+def _lambda_remaining_ms(lambda_context: Optional[Any]) -> Optional[int]:
+    """Best-effort remaining time when running inside AWS Lambda."""
+    if lambda_context is None:
+        return None
+    fn = getattr(lambda_context, "get_remaining_time_in_millis", None)
+    if fn is None or not callable(fn):
+        return None
+    try:
+        return int(fn())
+    except Exception:
+        return None
+
 
 # Global state for graceful shutdown
 _shutdown_requested = False
@@ -480,12 +497,13 @@ async def scrape_month(
     federations_path: Path,
     output_path: Union[Path, str],
     output_format: str = "ids",
-    max_concurrency: int = 5,
+    max_concurrency: int = 1,
     json_uri: Optional[str] = None,
     max_retries: int = 3,
     retry_delay: float = 1.0,
     limit: int = 0,
     save_raw: bool = True,
+    lambda_context: Optional[Any] = None,
 ) -> List[Tournament]:
     """
     Scrape all federations for a given month.
@@ -501,6 +519,7 @@ async def scrape_month(
         retry_delay: Base delay in seconds between retries.
         save_raw: If True and output uses data/tournament_ids.txt structure, save raw
             JSON from all federations concatenated to raw/tournaments.json.gz (gzip-9).
+        lambda_context: Optional AWS Lambda context (for CloudWatch: remaining time, ETA).
 
     Returns:
         List of unique Tournament objects.
@@ -520,6 +539,17 @@ async def scrape_month(
         f"with max concurrency {max_concurrency}"
     )
     start_time = time.time()
+    rem0 = _lambda_remaining_ms(lambda_context)
+    if rem0 is not None:
+        logger.info(
+            "Tournaments timing: lambda_remaining_ms=%s (~%.1f min left at start), "
+            "lambda_max_ms=%s, federations=%d, concurrency=%d",
+            rem0,
+            rem0 / 60_000,
+            _LAMBDA_MAX_MS,
+            len(federations),
+            max_concurrency,
+        )
 
     # Set up signal handlers for graceful shutdown
     _shutdown_state = {
@@ -607,14 +637,35 @@ async def scrape_month(
                 if processed_count > 0:
                     avg_time = elapsed / processed_count
                     remaining = avg_time * (len(federations) - processed_count)
+                    rem_ms = _lambda_remaining_ms(lambda_context)
+                    proj_total_s = (elapsed / processed_count) * len(federations)
                     logger.info(
-                        "[%d/%d (%.1f%%)] Elapsed: %s, Est. remaining: %s",
+                        "[%d/%d (%.1f%%)] Elapsed: %s, Est. remaining: %s, "
+                        "avg_s_per_federation=%.2f, projected_total_s=%.0f%s%s",
                         processed_count,
                         len(federations),
                         progress_pct,
                         format_time(elapsed),
                         format_time(remaining),
+                        avg_time,
+                        proj_total_s,
+                        f", lambda_remaining_ms={rem_ms}" if rem_ms is not None else "",
+                        (
+                            f", risk_timeout_vs_lambda_900s={'yes' if proj_total_s > 780 else 'no'}"
+                        ),
                     )
+                    if proj_total_s > 780:
+                        logger.warning(
+                            "Tournaments: projected_total_s=%.0f may exceed Lambda 900s; "
+                            "raise execution input tournaments_max_concurrency (trade-off: FIDE load)",
+                            proj_total_s,
+                        )
+                    if rem_ms is not None and rem_ms < 120_000:
+                        logger.warning(
+                            "Tournaments: lambda_remaining_ms=%d (~%d min) — may hit Sandbox.Timedout soon",
+                            rem_ms,
+                            max(1, rem_ms // 60_000),
+                        )
 
     # Write concatenated raw JSON from all federations (single file to reduce PUT costs)
     if raw_tournaments_uri and raw_items:
@@ -704,6 +755,15 @@ async def scrape_month(
         print(f"  By time control: {tc_counts}")
     print("=" * 80)
 
+    rem_end = _lambda_remaining_ms(lambda_context)
+    logger.info(
+        "Tournaments scrape finished: elapsed_s=%.1f unique_tournaments=%d federation_errors=%d%s",
+        elapsed,
+        len(unique_tournaments),
+        len(errors),
+        f" lambda_remaining_ms={rem_end}" if rem_end is not None else "",
+    )
+
     return unique_tournaments, len(errors), len(federations)
 
 
@@ -729,9 +789,10 @@ def run(
     federations_s3_uri: Optional[str] = None,
     override: bool = False,
     quiet: bool = False,
-    max_concurrency: int = 5,
+    max_concurrency: int = 1,
     ids_uri: Optional[str] = None,
     json_uri: Optional[str] = None,
+    lambda_context: Optional[Any] = None,
 ) -> int:
     """
     Scrape tournament IDs for a month and write to S3 or local.
@@ -747,6 +808,7 @@ def run(
         max_concurrency: Max concurrent requests.
         ids_uri: Output path for IDs file (overrides bucket/output_prefix when set).
         json_uri: Output path for JSON sample (overrides derivation when set).
+        lambda_context: AWS Lambda context for CloudWatch timing logs (optional).
 
     Returns:
         0 on success, 1 on failure.
@@ -794,6 +856,7 @@ def run(
                 output_format="ids",
                 max_concurrency=max_concurrency,
                 json_uri=json_uri,
+                lambda_context=lambda_context,
             )
         )
         return _scrape_exit_code(n_errors, n_total)
@@ -861,8 +924,8 @@ def main() -> int:
         "--concurrency",
         "-c",
         type=int,
-        default=5,
-        help="Maximum number of concurrent requests (default: 5)",
+        default=1,
+        help="Maximum number of concurrent requests (default: 1; use higher for local only if FIDE allows)",
     )
     parser.add_argument(
         "--max-retries",

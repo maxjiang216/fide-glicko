@@ -53,7 +53,8 @@
         "run_type.$": "$.run_type",
         "run_name.$": "$.run_name",
         "bucket.$": "$.bucket",
-        "override.$": "$.override"
+        "override.$": "$.override",
+        "tournaments_max_concurrency.$": "$.tournaments_max_concurrency"
       },
       "ResultPath": "$.tournaments",
       "Retry": [

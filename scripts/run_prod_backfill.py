@@ -178,6 +178,14 @@ def main() -> int:
         help="Map state concurrency per execution (default: 5)",
     )
     parser.add_argument(
+        "--tournaments-max-concurrency",
+        type=int,
+        default=None,
+        metavar="N",
+        help="Tournaments Lambda: parallel federation requests (default: omit = 1). "
+        "Raise if tournaments step hits 900s Sandbox.Timedout",
+    )
+    parser.add_argument(
         "--chunk-size",
         type=int,
         default=None,
@@ -282,6 +290,8 @@ def main() -> int:
         }
         if args.chunk_size is not None:
             input_dict["chunk_size"] = args.chunk_size
+        if args.tournaments_max_concurrency is not None:
+            input_dict["tournaments_max_concurrency"] = args.tournaments_max_concurrency
         try:
             resp = client.start_execution(
                 stateMachineArn=arn,

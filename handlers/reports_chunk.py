@@ -20,6 +20,8 @@ Event shape:
 - save_raw: If true, save raw HTML to raw/reports/reports_chunk_{i}.html.gz (default: true)
 - details_path: Optional S3 URI to details chunk parquet for date inference.
 
+Rate limit: **0.33 req/s** to FIDE (same order of magnitude as details_chunk; lowers burst vs unlimited).
+
 Outputs: parquet, plus reports_chunk_{i}_verbose_sample.json and reports_chunk_{i}_games_sample.csv.
 When tournaments have no original report (page says "updated or replaced"), writes
 reports_chunk_{i}_skipped.json to reports/.
@@ -139,7 +141,7 @@ def lambda_handler(event: dict, context) -> dict:
         input_path=input_path,
         output_path=output_path,
         details_path=details_path,
-        rate_limit=0.5,
+        rate_limit=0.33,
         quiet=False,
         save_raw=save_raw,
         output_sample_json=output_sample_json,

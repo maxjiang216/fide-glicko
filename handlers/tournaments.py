@@ -18,6 +18,8 @@ Event shape:
 - bucket: S3 bucket (default: fide-glicko)
 - override: If true, overwrite existing output
 - federations_s3_uri: Optional. Defaults to {base}/data/federations.csv
+- tournaments_max_concurrency: Optional int (default 1). Parallel federation requests to FIDE.
+  Increase if Sandbox.Timedout at 900s; lower reduces throttling risk.
 
 Outputs: {base}/data/tournament_ids.txt, {base}/sample/tournament_ids_sample.json,
 {base}/raw/tournaments.json.gz (raw API JSON, all federations concatenated, gzip-9)
@@ -95,14 +97,21 @@ def lambda_handler(event: dict, context) -> dict:
                 "ids_uri": ids_uri,
             }
 
+    tm = event.get("tournaments_max_concurrency")
+    max_concurrency = int(tm) if tm is not None else 1
+    if max_concurrency < 1:
+        max_concurrency = 1
+
     logger.info(
-        "Starting tournaments scrape: year=%s month=%s bucket=%s run_type=%s run_name=%s override=%s -> %s",
+        "Starting tournaments scrape: year=%s month=%s bucket=%s run_type=%s run_name=%s "
+        "override=%s tournaments_max_concurrency=%s -> %s",
         year,
         month,
         bucket,
         run_type,
         run_name,
         override,
+        max_concurrency,
         ids_uri,
     )
 
@@ -129,6 +138,8 @@ def lambda_handler(event: dict, context) -> dict:
         quiet=False,
         ids_uri=ids_uri,
         json_uri=json_uri,
+        max_concurrency=max_concurrency,
+        lambda_context=context,
     )
 
     if exit_code != 0:
