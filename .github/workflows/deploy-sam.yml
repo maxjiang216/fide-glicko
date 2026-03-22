@@ -83,6 +83,10 @@ jobs:
       - name: Prepare per-function directories
         run: bash scripts/prepare_functions.sh
 
+      - name: Ensure ECR repositories exist
+        if: github.event_name == 'push' || github.event_name == 'pull_request' || github.event.inputs.deploy == 'true'
+        run: bash scripts/ensure_ecr_repos.sh
+
       - name: SAM build
         run: sam build --cached
 

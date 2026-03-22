@@ -3,6 +3,9 @@
 #
 # resolve_s3=false and resolve_image_repos=false bypass the managed stack
 # (aws-sam-cli-managed-default) to avoid "InitialCreation" errors in CI.
+#
+# Image repos: readable names under fideglicko/* (see scripts/ensure_ecr_repos.sh).
+# Replace ACCOUNT/REGION in URIs if you deploy from another account/region.
 version = 0.1
 
 [default.deploy.parameters]
@@ -11,11 +14,11 @@ resolve_s3 = false
 s3_bucket = "aws-sam-cli-managed-default-samclisourcebucket-2kqs2vt0rs5c"
 resolve_image_repos = false
 image_repositories = [
-  "PlayerListFunction=710271917035.dkr.ecr.us-east-1.amazonaws.com/fideglicko327ae736/playerlistfunctionbe35717crepo",
-  "DetailsChunkFunction=710271917035.dkr.ecr.us-east-1.amazonaws.com/fideglicko327ae736/detailschunkfunction7fddf1b8repo",
-  "ReportsChunkFunction=710271917035.dkr.ecr.us-east-1.amazonaws.com/fideglicko327ae736/reportschunkfunctionce85551erepo",
-  "MergeChunksFunction=710271917035.dkr.ecr.us-east-1.amazonaws.com/fideglicko327ae736/mergechunksfunctione49a84d4repo",
-  "ValidateFunction=710271917035.dkr.ecr.us-east-1.amazonaws.com/fideglicko327ae736/validatefunctioneddf4248repo"
+  "PlayerListFunction=710271917035.dkr.ecr.us-east-1.amazonaws.com/fideglicko/player-list",
+  "DetailsChunkFunction=710271917035.dkr.ecr.us-east-1.amazonaws.com/fideglicko/details-chunk",
+  "ReportsChunkFunction=710271917035.dkr.ecr.us-east-1.amazonaws.com/fideglicko/reports-chunk",
+  "MergeChunksFunction=710271917035.dkr.ecr.us-east-1.amazonaws.com/fideglicko/merge-chunks",
+  "ValidateFunction=710271917035.dkr.ecr.us-east-1.amazonaws.com/fideglicko/validate"
 ]
 capabilities = "CAPABILITY_IAM"
 parameter_overrides = []
