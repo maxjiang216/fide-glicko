@@ -72,7 +72,8 @@ Resources:
             BucketName: !Ref DataBucket
       Description: Fetch tournament IDs per federation
 
-  PlayerListFunction:
+  # Shared Docker image: SAM tags builds lambdaimage-<hash>-data (logical ID LambdaImage = first alphabetically in this group).
+  LambdaImage:
     Type: AWS::Serverless::Function
     Metadata:
       DockerContext: .
@@ -91,7 +92,7 @@ Resources:
             BucketName: !Ref DataBucket
       Description: Fetch FIDE player list XML
 
-  DetailsChunkFunction:
+  LambdaImageDetailsChunk:
     Type: AWS::Serverless::Function
     Metadata:
       DockerContext: .
@@ -110,7 +111,7 @@ Resources:
             BucketName: !Ref DataBucket
       Description: Scrape tournament details for a chunk
 
-  ReportsChunkFunction:
+  LambdaImageReportsChunk:
     Type: AWS::Serverless::Function
 
     Metadata:
@@ -130,7 +131,7 @@ Resources:
             BucketName: !Ref DataBucket
       Description: Scrape tournament reports for a chunk
 
-  MergeChunksFunction:
+  LambdaImageMergeChunks:
     Type: AWS::Serverless::Function
     Metadata:
       DockerContext: .
@@ -149,7 +150,7 @@ Resources:
             BucketName: !Ref DataBucket
       Description: Merge detail and report chunks into single parquet files
 
-  ValidateFunction:
+  LambdaImageValidate:
     Type: AWS::Serverless::Function
     Metadata:
       DockerContext: .
@@ -191,12 +192,12 @@ Resources:
         EnsureRunNameFunctionArn: !GetAtt EnsureRunNameFunction.Arn
         FederationsFunctionArn: !GetAtt FederationsFunction.Arn
         TournamentsFunctionArn: !GetAtt TournamentsFunction.Arn
-        PlayerListFunctionArn: !GetAtt PlayerListFunction.Arn
+        PlayerListFunctionArn: !GetAtt LambdaImage.Arn
         SplitIdsFunctionArn: !GetAtt SplitIdsFunction.Arn
-        DetailsChunkFunctionArn: !GetAtt DetailsChunkFunction.Arn
-        ReportsChunkFunctionArn: !GetAtt ReportsChunkFunction.Arn
-        MergeChunksFunctionArn: !GetAtt MergeChunksFunction.Arn
-        ValidateFunctionArn: !GetAtt ValidateFunction.Arn
+        DetailsChunkFunctionArn: !GetAtt LambdaImageDetailsChunk.Arn
+        ReportsChunkFunctionArn: !GetAtt LambdaImageReportsChunk.Arn
+        MergeChunksFunctionArn: !GetAtt LambdaImageMergeChunks.Arn
+        ValidateFunctionArn: !GetAtt LambdaImageValidate.Arn
       Policies:
         - Version: "2012-10-17"
           Statement:
@@ -206,12 +207,12 @@ Resources:
                 - !GetAtt EnsureRunNameFunction.Arn
                 - !GetAtt FederationsFunction.Arn
                 - !GetAtt TournamentsFunction.Arn
-                - !GetAtt PlayerListFunction.Arn
+                - !GetAtt LambdaImage.Arn
                 - !GetAtt SplitIdsFunction.Arn
-                - !GetAtt DetailsChunkFunction.Arn
-                - !GetAtt ReportsChunkFunction.Arn
-                - !GetAtt MergeChunksFunction.Arn
-                - !GetAtt ValidateFunction.Arn
+                - !GetAtt LambdaImageDetailsChunk.Arn
+                - !GetAtt LambdaImageReportsChunk.Arn
+                - !GetAtt LambdaImageMergeChunks.Arn
+                - !GetAtt LambdaImageValidate.Arn
 
 Outputs:
   PipelineStateMachineArn:
