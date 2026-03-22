@@ -4,8 +4,8 @@
 # resolve_s3=false and resolve_image_repos=false bypass the managed stack
 # (aws-sam-cli-managed-default) to avoid "InitialCreation" errors in CI.
 #
-# Image repos: readable names under fideglicko/* (see scripts/ensure_ecr_repos.sh).
-# Replace ACCOUNT/REGION in URIs if you deploy from another account/region.
+# One shared ECR repo; image tag is SAM's build label (e.g. lambdaimage-<hash>-data from logical ID LambdaImage).
+# See scripts/ensure_ecr_repos.sh. Replace ACCOUNT/REGION in URIs if you deploy elsewhere.
 version = 0.1
 
 [default.deploy.parameters]
@@ -14,11 +14,11 @@ resolve_s3 = false
 s3_bucket = "aws-sam-cli-managed-default-samclisourcebucket-2kqs2vt0rs5c"
 resolve_image_repos = false
 image_repositories = [
-  "PlayerListFunction=710271917035.dkr.ecr.us-east-1.amazonaws.com/fideglicko/player-list",
-  "DetailsChunkFunction=710271917035.dkr.ecr.us-east-1.amazonaws.com/fideglicko/details-chunk",
-  "ReportsChunkFunction=710271917035.dkr.ecr.us-east-1.amazonaws.com/fideglicko/reports-chunk",
-  "MergeChunksFunction=710271917035.dkr.ecr.us-east-1.amazonaws.com/fideglicko/merge-chunks",
-  "ValidateFunction=710271917035.dkr.ecr.us-east-1.amazonaws.com/fideglicko/validate"
+  "LambdaImage=710271917035.dkr.ecr.us-east-1.amazonaws.com/fideglicko/lambda-data",
+  "LambdaImageDetailsChunk=710271917035.dkr.ecr.us-east-1.amazonaws.com/fideglicko/lambda-data",
+  "LambdaImageReportsChunk=710271917035.dkr.ecr.us-east-1.amazonaws.com/fideglicko/lambda-data",
+  "LambdaImageMergeChunks=710271917035.dkr.ecr.us-east-1.amazonaws.com/fideglicko/lambda-data",
+  "LambdaImageValidate=710271917035.dkr.ecr.us-east-1.amazonaws.com/fideglicko/lambda-data"
 ]
 capabilities = "CAPABILITY_IAM"
 parameter_overrides = []
