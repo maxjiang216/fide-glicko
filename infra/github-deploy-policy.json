@@ -5,7 +5,7 @@
       "Sid": "SyncPolicy",
       "Effect": "Allow",
       "Action": "iam:PutRolePolicy",
-      "Resource": "arn:aws:iam::710271917035:policy/fide-glicko-github-deploy"
+      "Resource": "arn:aws:iam::710271917035:role/github-fide-glicko-deploy"
     },
     {
       "Sid": "CloudFormation",
@@ -93,7 +93,10 @@
         "iam:TagRole",
         "iam:UntagRole"
       ],
-      "Resource": "arn:aws:iam::710271917035:role/fide-glicko-*"
+      "Resource": [
+        "arn:aws:iam::710271917035:role/fide-glicko-*",
+        "arn:aws:iam::710271917035:role/github-fide-glicko-deploy"
+      ]
     },
     {
       "Sid": "ECR",
