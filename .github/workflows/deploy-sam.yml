@@ -126,22 +126,27 @@ jobs:
         if: github.event_name == 'push' || github.event.inputs.deploy == 'true'
         run: |
           # PR #73 renamed logical IDs (PlayerListFunction → LambdaImage, etc.) while keeping the
-          # same FunctionNames. CF treats this as delete-old + create-new, but create runs first,
-          # causing a name collision caught by AWS::EarlyValidation::ResourceExistenceCheck.
-          # Pre-delete the functions so CF can recreate them under the new logical IDs.
-          # Safe: CF's Lambda resource handler treats "not found" on delete as success.
+          # same FunctionNames. CF tracks physical resource names per logical ID, so it refuses to
+          # create a new resource with a name already owned by the stack under a different ID —
+          # even after the Lambda is deleted from AWS. The only fix is to delete the whole stack
+          # so CF loses its internal ownership records, then SAM recreates everything fresh.
           if aws cloudformation describe-stack-resource \
               --stack-name fide-glicko \
               --logical-resource-id PlayerListFunction \
               --region "${AWS_REGION}" 2>/dev/null; then
-            echo "Old logical IDs detected — deleting Lambda functions to unblock rename..."
-            for func in fide-glicko-player-list fide-glicko-details-chunk fide-glicko-reports-chunk fide-glicko-merge-chunks fide-glicko-validate; do
-              aws lambda delete-function --function-name "$func" --region "${AWS_REGION}" \
-                && echo "Deleted: $func" || echo "Already gone: $func"
-            done
+            echo "Old logical IDs detected — deleting stack for clean rename migration..."
+            aws cloudformation delete-stack --stack-name fide-glicko --region "${AWS_REGION}"
+            aws cloudformation wait stack-delete-complete --stack-name fide-glicko --region "${AWS_REGION}"
+            echo "Stack deleted — SAM will recreate it fresh"
           else
             echo "Migration not needed — old logical IDs are gone"
           fi
+        env:
+          AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
+
+      - name: SAM changeset preview (PR only)
+        if: github.event_name == 'pull_request'
+        run: sam deploy --no-execute-changeset --no-fail-on-empty-changeset
         env:
           AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
 
