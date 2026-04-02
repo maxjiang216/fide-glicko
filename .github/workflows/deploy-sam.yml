@@ -122,6 +122,29 @@ jobs:
           print('Step Function definition valid (result=OK)')
           "
 
+      - name: Migrate Lambda logical ID rename (one-time, PR #73)
+        if: github.event_name == 'push' || github.event.inputs.deploy == 'true'
+        run: |
+          # PR #73 renamed logical IDs (PlayerListFunction → LambdaImage, etc.) while keeping the
+          # same FunctionNames. CF treats this as delete-old + create-new, but create runs first,
+          # causing a name collision caught by AWS::EarlyValidation::ResourceExistenceCheck.
+          # Pre-delete the functions so CF can recreate them under the new logical IDs.
+          # Safe: CF's Lambda resource handler treats "not found" on delete as success.
+          if aws cloudformation describe-stack-resource \
+              --stack-name fide-glicko \
+              --logical-resource-id PlayerListFunction \
+              --region "${AWS_REGION}" 2>/dev/null; then
+            echo "Old logical IDs detected — deleting Lambda functions to unblock rename..."
+            for func in fide-glicko-player-list fide-glicko-details-chunk fide-glicko-reports-chunk fide-glicko-merge-chunks fide-glicko-validate; do
+              aws lambda delete-function --function-name "$func" --region "${AWS_REGION}" \
+                && echo "Deleted: $func" || echo "Already gone: $func"
+            done
+          else
+            echo "Migration not needed — old logical IDs are gone"
+          fi
+        env:
+          AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
+
       - name: SAM deploy
         if: github.event_name == 'push' || github.event.inputs.deploy == 'true'
         run: sam deploy --no-confirm-changeset
