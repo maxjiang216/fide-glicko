@@ -144,6 +144,25 @@ jobs:
         env:
           AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
 
+      - name: Delete ROLLBACK_COMPLETE stack before SAM deploy
+        if: github.event_name == 'push' || github.event_name == 'pull_request' || github.event.inputs.deploy == 'true'
+        run: |
+          STACK_STATUS=$(aws cloudformation describe-stacks \
+            --stack-name fide-glicko \
+            --region "${AWS_REGION}" \
+            --query 'Stacks[0].StackStatus' \
+            --output text 2>/dev/null || true)
+
+          if [ "${STACK_STATUS}" = "ROLLBACK_COMPLETE" ]; then
+            echo "Stack fide-glicko is in ROLLBACK_COMPLETE; deleting so SAM can recreate it"
+            aws cloudformation delete-stack --stack-name fide-glicko --region "${AWS_REGION}"
+            aws cloudformation wait stack-delete-complete --stack-name fide-glicko --region "${AWS_REGION}"
+          else
+            echo "Stack fide-glicko status is ${STACK_STATUS:-MISSING}; no rollback cleanup needed"
+          fi
+        env:
+          AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
+
       - name: SAM changeset preview (PR only)
         if: github.event_name == 'pull_request'
         run: sam deploy --no-execute-changeset --no-fail-on-empty-changeset
