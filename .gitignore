@@ -30,6 +30,7 @@ uv.lock
 
 # IDE
 .cursor/
+.codex
 .vscode/
 .idea/
 *.swp

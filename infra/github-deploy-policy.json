@@ -133,7 +133,9 @@
         "states:UpdateStateMachine",
         "states:DeleteStateMachine",
         "states:DescribeStateMachine",
-        "states:ListStateMachines"
+        "states:ListStateMachines",
+        "states:TagResource",
+        "states:UntagResource"
       ],
       "Resource": "arn:aws:states:us-east-1:710271917035:stateMachine:fide-glicko-pipeline"
     },
