@@ -47,7 +47,9 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src" / "scraper"))
 
 from s3_io import write_output
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+logging.basicConfig(
+    level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
+)
 logger = logging.getLogger(__name__)
 
 BASE_URL = "https://ratings.fide.com/rated_tournaments.phtml"

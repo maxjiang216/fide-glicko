@@ -45,6 +45,7 @@ COUNTRY_MONTHS_KEY = "metadata/country_months.json"
 
 logger = logging.getLogger(__name__)
 
+
 def _load_federation_filter(bucket: str, year: int, month: int) -> frozenset | None:
     """
     Load country-months lookup from S3 and return the set of federation codes
@@ -80,7 +81,9 @@ def _load_federation_filter(bucket: str, year: int, month: int) -> frozenset | N
             )
         return None
     except Exception as e:
-        logger.warning("Failed to load country-months lookup: %s; querying all federations", e)
+        logger.warning(
+            "Failed to load country-months lookup: %s; querying all federations", e
+        )
         return None
 
 

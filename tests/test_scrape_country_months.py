@@ -18,7 +18,6 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
 
 from scrape_country_months import from_csv
 
-
 # ---------------------------------------------------------------------------
 # Offline: CSV conversion
 # ---------------------------------------------------------------------------
@@ -71,7 +70,12 @@ def test_from_csv_sorted(tmp_path):
 
 def test_from_csv_real_file():
     """Use the existing exploratory CSV if present; skip otherwise."""
-    csv_path = Path(__file__).parent.parent / "exploratory" / "data" / "tournaments_by_country_month.csv"
+    csv_path = (
+        Path(__file__).parent.parent
+        / "exploratory"
+        / "data"
+        / "tournaments_by_country_month.csv"
+    )
     if not csv_path.exists():
         pytest.skip("exploratory/data/tournaments_by_country_month.csv not found")
 
@@ -81,12 +85,15 @@ def test_from_csv_real_file():
     assert "RUS" in result
     # Should go back to at least 2006
     all_months = [m for months in result.values() for m in months]
-    assert min(all_months) <= "2006-12", f"Expected data back to 2006, got {min(all_months)}"
+    assert (
+        min(all_months) <= "2006-12"
+    ), f"Expected data back to 2006, got {min(all_months)}"
 
 
 # ---------------------------------------------------------------------------
 # Online: Playwright scraping smoke test
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.online
 def test_scrape_one_federation_live():
@@ -102,7 +109,9 @@ def test_scrape_one_federation_live():
     assert code == "FRA"
     assert len(months) > 50, f"Expected >50 months for FRA, got {len(months)}"
     # FRA should have data back to at least 2006
-    assert any(m <= "2006-12" for m in months), f"Expected months back to 2006 for FRA, got earliest={min(months) if months else 'none'}"
+    assert any(
+        m <= "2006-12" for m in months
+    ), f"Expected months back to 2006 for FRA, got earliest={min(months) if months else 'none'}"
     # All values should be YYYY-MM format
     for m in months:
         assert len(m) == 7 and m[4] == "-", f"Unexpected month format: {m!r}"

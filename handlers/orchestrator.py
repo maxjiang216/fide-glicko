@@ -108,7 +108,9 @@ def _parse_month_from_execution_name(name: str) -> Optional[str]:
     return None
 
 
-def _get_running_and_last_execution(state_machine_arn: str) -> tuple[bool, Optional[dict]]:
+def _get_running_and_last_execution(
+    state_machine_arn: str,
+) -> tuple[bool, Optional[dict]]:
     """
     Return (is_running, last_completed_execution).
     last_completed_execution is the most recent non-RUNNING execution dict, or None.
@@ -119,9 +121,7 @@ def _get_running_and_last_execution(state_machine_arn: str) -> tuple[bool, Optio
     executions = resp.get("executions", [])
 
     is_running = any(e["status"] == "RUNNING" for e in executions)
-    last_completed = next(
-        (e for e in executions if e["status"] != "RUNNING"), None
-    )
+    last_completed = next((e for e in executions if e["status"] != "RUNNING"), None)
     return is_running, last_completed
 
 
@@ -132,7 +132,10 @@ def lambda_handler(event: dict, context) -> dict:
 
     if not state_machine_arn:
         logger.error("PIPELINE_STATE_MACHINE_ARN env var not set")
-        return {"status": "error", "message": "PIPELINE_STATE_MACHINE_ARN not configured"}
+        return {
+            "status": "error",
+            "message": "PIPELINE_STATE_MACHINE_ARN not configured",
+        }
 
     # 1. Check for running execution — nothing to do if pipeline is active
     is_running, last_exec = _get_running_and_last_execution(state_machine_arn)
@@ -159,7 +162,9 @@ def lambda_handler(event: dict, context) -> dict:
                 # Remove from hint queue — this month is done
                 if exec_month in state["remaining_months"]:
                     state["remaining_months"].remove(exec_month)
-                logger.info("Execution SUCCEEDED for %s; removed from queue", exec_month)
+                logger.info(
+                    "Execution SUCCEEDED for %s; removed from queue", exec_month
+                )
             elif exec_status in ("FAILED", "TIMED_OUT", "ABORTED"):
                 state["deferred_months"][exec_month] = (
                     state["deferred_months"].get(exec_month, 0) + 1
@@ -213,7 +218,9 @@ def lambda_handler(event: dict, context) -> dict:
             return {"status": "complete"}
         state["remaining_months"] = incomplete
         state["last_scan"] = datetime.now(timezone.utc).isoformat()
-        logger.info("S3 scan found %d incomplete months; rebuilt hint queue", len(incomplete))
+        logger.info(
+            "S3 scan found %d incomplete months; rebuilt hint queue", len(incomplete)
+        )
         queue = incomplete
 
     # 5. Apply DLQ: normal queue first, fall back to deferred when normal is empty
