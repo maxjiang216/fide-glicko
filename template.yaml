@@ -183,6 +183,38 @@ Resources:
             BucketName: !Ref DataBucket
       Description: Split tournament IDs into chunks
 
+  OrchestratorFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: fide-glicko-orchestrator
+      Runtime: python3.12
+      CodeUri: .functions/orchestrator
+      Handler: handlers.orchestrator.lambda_handler
+      Timeout: 60
+      MemorySize: 128
+      Description: Hourly backfill orchestrator — finds earliest incomplete month and starts pipeline
+      Environment:
+        Variables:
+          DATA_BUCKET: !Ref DataBucket
+          PIPELINE_STATE_MACHINE_ARN: !Ref PipelineStateMachine
+      Policies:
+        - S3CrudPolicy:
+            BucketName: !Ref DataBucket
+        - Statement:
+            - Effect: Allow
+              Action:
+                - states:ListExecutions
+                - states:StartExecution
+                - states:DescribeExecution
+              Resource: !Ref PipelineStateMachine
+      Events:
+        HourlySchedule:
+          Type: Schedule
+          Properties:
+            Schedule: "rate(1 hour)"
+            Description: "Backfill orchestrator — disabled by default, enable manually when ready"
+            Enabled: false
+
   PipelineStateMachine:
     Type: AWS::Serverless::StateMachine
     Properties:

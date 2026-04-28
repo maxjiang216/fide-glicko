@@ -144,6 +144,23 @@
       "Effect": "Allow",
       "Action": ["states:ValidateStateMachineDefinition"],
       "Resource": "*"
+    },
+    {
+      "Sid": "EventBridge",
+      "Effect": "Allow",
+      "Action": [
+        "events:PutRule",
+        "events:DeleteRule",
+        "events:DescribeRule",
+        "events:EnableRule",
+        "events:DisableRule",
+        "events:PutTargets",
+        "events:RemoveTargets",
+        "events:ListTargetsByRule",
+        "events:TagResource",
+        "events:UntagResource"
+      ],
+      "Resource": "arn:aws:events:us-east-1:710271917035:rule/fide-glicko-*"
     }
   ]
 }

@@ -504,6 +504,7 @@ async def scrape_month(
     limit: int = 0,
     save_raw: bool = True,
     lambda_context: Optional[Any] = None,
+    federation_filter: Optional[frozenset] = None,
 ) -> List[Tournament]:
     """
     Scrape all federations for a given month.
@@ -533,6 +534,17 @@ async def scrape_month(
     except Exception as e:
         logger.error(f"Error reading federations: {e}")
         return [], 0, 0
+
+    if federation_filter is not None:
+        n_before = len(federations)
+        federations = [(c, n) for c, n in federations if c in federation_filter]
+        logger.info(
+            "Country-month filter: %d -> %d federations for %d-%02d",
+            n_before,
+            len(federations),
+            year,
+            month,
+        )
 
     logger.info(
         f"Processing {len(federations)} federations for {year}-{month:02d} "
@@ -793,6 +805,7 @@ def run(
     ids_uri: Optional[str] = None,
     json_uri: Optional[str] = None,
     lambda_context: Optional[Any] = None,
+    federation_filter: Optional[frozenset] = None,
 ) -> int:
     """
     Scrape tournament IDs for a month and write to S3 or local.
@@ -857,6 +870,7 @@ def run(
                 max_concurrency=max_concurrency,
                 json_uri=json_uri,
                 lambda_context=lambda_context,
+                federation_filter=federation_filter,
             )
         )
         return _scrape_exit_code(n_errors, n_total)

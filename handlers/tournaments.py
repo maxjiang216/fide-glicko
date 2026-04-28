@@ -25,7 +25,11 @@ Outputs: {base}/data/tournament_ids.txt, {base}/sample/tournament_ids_sample.jso
 {base}/raw/tournaments.json.gz (raw API JSON, all federations concatenated, gzip-9)
 """
 
+import json
 import logging
+
+import boto3
+from botocore.exceptions import ClientError
 
 from .lambda_logging import configure
 from s3_io import (
@@ -37,7 +41,50 @@ from s3_io import (
 )
 from get_tournaments import run
 
+COUNTRY_MONTHS_KEY = "metadata/country_months.json"
+
 logger = logging.getLogger(__name__)
+
+
+def _load_federation_filter(bucket: str, year: int, month: int) -> frozenset | None:
+    """
+    Load country-months lookup from S3 and return the set of federation codes
+    that have tournament data for the given year/month. Returns None if the
+    lookup file doesn't exist or fails to load (falls back to querying all feds).
+    """
+    year_month = f"{year}-{month:02d}"
+    try:
+        s3 = boto3.client("s3")
+        obj = s3.get_object(Bucket=bucket, Key=COUNTRY_MONTHS_KEY)
+        data = json.loads(obj["Body"].read().decode("utf-8"))
+        country_months = data.get("country_months", {})
+        codes = frozenset(
+            code for code, months in country_months.items() if year_month in months
+        )
+        logger.info(
+            "Country-month lookup loaded: %d/%d federations have data for %s",
+            len(codes),
+            len(country_months),
+            year_month,
+        )
+        return codes
+    except ClientError as e:
+        if e.response["Error"]["Code"] in ("NoSuchKey", "404"):
+            logger.info(
+                "No country-months lookup at %s/%s; querying all federations",
+                bucket,
+                COUNTRY_MONTHS_KEY,
+            )
+        else:
+            logger.warning(
+                "Failed to load country-months lookup (%s); querying all federations", e
+            )
+        return None
+    except Exception as e:
+        logger.warning(
+            "Failed to load country-months lookup: %s; querying all federations", e
+        )
+        return None
 
 
 def lambda_handler(event: dict, context) -> dict:
@@ -102,6 +149,8 @@ def lambda_handler(event: dict, context) -> dict:
     if max_concurrency < 1:
         max_concurrency = 1
 
+    federation_filter = _load_federation_filter(bucket, int(year), int(month))
+
     logger.info(
         "Starting tournaments scrape: year=%s month=%s bucket=%s run_type=%s run_name=%s "
         "override=%s tournaments_max_concurrency=%s -> %s",
@@ -140,6 +189,7 @@ def lambda_handler(event: dict, context) -> dict:
         json_uri=json_uri,
         max_concurrency=max_concurrency,
         lambda_context=context,
+        federation_filter=federation_filter,
     )
 
     if exit_code != 0:
