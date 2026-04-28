@@ -31,29 +31,54 @@ import boto3
 from botocore.exceptions import ClientError
 
 from .lambda_logging import configure
-from s3_io import build_run_base, output_exists
+from s3_io import output_exists
 
 logger = logging.getLogger(__name__)
 
-BACKFILL_START = (2006, 1)
-BACKFILL_END = (2024, 12)
+BACKFILL_START = "2006-01"
+BACKFILL_END = "2024-12"
 COOLDOWN_HOURS = 2
 DEFERRED_THRESHOLD = 3  # failures before a month moves to the deferred queue
 STATE_KEY = "metadata/orchestrator_state.json"
+COUNTRY_MONTHS_KEY = "metadata/country_months.json"
 EXEC_NAME_RE = re.compile(r"^orch-(\d{4})-(\d{2})-\d{14}$")
 
 
-def _all_backfill_months() -> list[str]:
-    """Return sorted list of all YYYY-MM strings from BACKFILL_START to BACKFILL_END."""
+def _active_backfill_months(bucket: str) -> list[str]:
+    """
+    Return sorted list of months that have at least one federation with tournament
+    data, filtered to [BACKFILL_START, BACKFILL_END].
+
+    Derived from the country_months.json lookup so we never queue months like
+    2006-02 that are empty for every country (FIDE used quarterly updates pre-2009).
+    Falls back to every calendar month in the range if the lookup is unavailable.
+    """
+    try:
+        s3 = boto3.client("s3")
+        obj = s3.get_object(Bucket=bucket, Key=COUNTRY_MONTHS_KEY)
+        data = json.loads(obj["Body"].read().decode("utf-8"))
+        all_months: set[str] = set()
+        for months in data.get("country_months", {}).values():
+            all_months.update(months)
+        return sorted(
+            m for m in all_months if BACKFILL_START <= m <= BACKFILL_END
+        )
+    except ClientError as e:
+        if e.response["Error"]["Code"] not in ("NoSuchKey", "404"):
+            logger.warning("Could not load country_months.json: %s", e)
+    except Exception as e:
+        logger.warning("Could not load country_months.json: %s", e)
+
+    # Fallback: every calendar month in range
+    logger.info("Falling back to all calendar months in backfill range")
     months = []
-    y, m = BACKFILL_START
-    end_y, end_m = BACKFILL_END
-    while (y, m) <= (end_y, end_m):
-        months.append(f"{y}-{m:02d}")
-        m += 1
-        if m > 12:
-            m = 1
-            y += 1
+    y, mo = int(BACKFILL_START[:4]), int(BACKFILL_START[5:])
+    end_y, end_mo = int(BACKFILL_END[:4]), int(BACKFILL_END[5:])
+    while (y, mo) <= (end_y, end_mo):
+        months.append(f"{y}-{mo:02d}")
+        mo += 1
+        if mo > 12:
+            mo, y = 1, y + 1
     return months
 
 
@@ -200,7 +225,7 @@ def lambda_handler(event: dict, context) -> dict:
             )
 
     # 4. Determine the work queue using the hint file
-    all_months = _all_backfill_months()
+    all_months = _active_backfill_months(bucket)
 
     if state["remaining_months"]:
         # Fast path: trust the hint queue
