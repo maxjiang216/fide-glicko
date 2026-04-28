@@ -28,9 +28,10 @@ beautifulsoup4>=4.14.3"
 REQS[tournaments]="aiohttp>=3.10.0"
 REQS[split_ids]=""
 REQS[ensure_run_name]=""
+REQS[orchestrator]=""
 
 # Put scraper modules at function root so "from get_federations import" etc. resolve
-for name in federations tournaments split_ids ensure_run_name; do
+for name in federations tournaments split_ids ensure_run_name orchestrator; do
   dir="$FUNCTIONS_DIR/$name"
   mkdir -p "$dir"
   link_or_copy "$REPO_ROOT/handlers" "$dir/"
