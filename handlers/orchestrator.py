@@ -37,8 +37,7 @@ logger = logging.getLogger(__name__)
 
 BACKFILL_START = "2006-01"
 BACKFILL_END = "2024-12"
-COOLDOWN_HOURS = 2
-DEFERRED_THRESHOLD = 3  # failures before a month moves to the deferred queue
+DEFERRED_THRESHOLD = 1  # any failure immediately pushes month to back of queue
 STATE_KEY = "metadata/orchestrator_state.json"
 COUNTRY_MONTHS_KEY = "metadata/country_months.json"
 EXEC_NAME_RE = re.compile(r"^orch-(\d{4})-(\d{2})-\d{14}$")
@@ -194,28 +193,11 @@ def lambda_handler(event: dict, context) -> dict:
                 )
                 fail_count = state["deferred_months"][exec_month]
                 logger.info(
-                    "Execution %s for %s (failure #%d)",
+                    "Execution %s for %s (failure #%d); deferring to back of queue",
                     exec_status,
                     exec_month,
                     fail_count,
                 )
-
-                # Cooldown: if the failure was recent, wait before trying again
-                stopped_at = last_exec.get("stopDate")
-                if stopped_at:
-                    if stopped_at.tzinfo is None:
-                        stopped_at = stopped_at.replace(tzinfo=timezone.utc)
-                    hours_ago = (
-                        datetime.now(timezone.utc) - stopped_at
-                    ).total_seconds() / 3600
-                    if hours_ago < COOLDOWN_HOURS:
-                        logger.info(
-                            "Last failure was %.1fh ago (cooldown=%.0fh) — waiting",
-                            hours_ago,
-                            COOLDOWN_HOURS,
-                        )
-                        _save_state(bucket, state)
-                        return {"status": "cooldown", "hours_ago": round(hours_ago, 1)}
         else:
             logger.info(
                 "Last execution '%s' was not started by orchestrator — ignoring for tracking",
