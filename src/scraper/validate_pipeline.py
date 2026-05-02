@@ -211,6 +211,37 @@ def validate_details_vs_reports(
     }
 
 
+def _collect_skipped_tournaments(bucket: str, base: str) -> dict:
+    """
+    Aggregate all *_skipped.json files written by reports_chunk into a summary.
+    Returns {"total": N, "by_error": {"no data found": [...], ...}}
+    """
+    import boto3
+
+    s3 = boto3.client("s3")
+    prefix = f"{base}/reports/tournament_reports_chunks/"
+    by_error: dict[str, list[str]] = {}
+    paginator = s3.get_paginator("list_objects_v2")
+    for page in paginator.paginate(Bucket=bucket, Prefix=prefix):
+        for obj in page.get("Contents", []):
+            key = obj["Key"]
+            if not key.endswith("_skipped.json"):
+                continue
+            try:
+                body = s3.get_object(Bucket=bucket, Key=key)["Body"].read()
+                entries = json.loads(body)
+                for entry in entries:
+                    err = entry.get("error", "unknown")
+                    by_error.setdefault(err, []).append(
+                        str(entry.get("tournament_code", "?"))
+                    )
+            except Exception:
+                pass
+
+    total = sum(len(v) for v in by_error.values())
+    return {"total": total, "by_error": by_error}
+
+
 def run(
     bucket: str,
     run_type: str,
@@ -279,6 +310,8 @@ def run(
         pl_result = validate_player_list_vs_reports(players_path, reports_path)
         dt_result = validate_details_vs_reports(details_path, reports_path)
 
+    skipped = _collect_skipped_tournaments(bucket, base)
+
     has_issues = False
     if "error" in pl_result:
         has_issues = True
@@ -296,6 +329,7 @@ def run(
         "run_type": run_type,
         "run_name": run_name or "",
         "has_issues": has_issues,
+        "skipped_tournaments": skipped,
         "player_list_vs_reports": pl_result,
         "details_vs_reports": dt_result,
     }
