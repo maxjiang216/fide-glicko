@@ -1282,6 +1282,10 @@ def _write_parquet_to_path(df: pd.DataFrame, path: str) -> None:
 
 
 ERROR_REPORT_UPDATED_OR_REPLACED = "report_updated_or_replaced"
+# Permanent structural failures — tournament page exists but has no usable data
+SKIPPABLE_ERRORS = frozenset(
+    [ERROR_REPORT_UPDATED_OR_REPLACED, "no data found", "no players found"]
+)
 
 
 def save_skipped_json(skipped: List[Dict], base_path: str) -> None:
@@ -1551,8 +1555,8 @@ def run(
 
         result = {"tournament_code": code}
         if report is None:
-            if error == ERROR_REPORT_UPDATED_OR_REPLACED:
-                # No original report (page says "updated or replaced") - skip, record
+            if error in SKIPPABLE_ERRORS:
+                # No usable report data — skip and record for audit
                 result["success"] = False
                 result["error"] = error
                 skipped_reports.append({"tournament_code": code, "error": error})
