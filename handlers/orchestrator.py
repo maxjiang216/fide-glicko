@@ -192,8 +192,12 @@ def lambda_handler(event: dict, context) -> dict:
                     state["deferred_months"].get(exec_month, 0) + 1
                 )
                 fail_count = state["deferred_months"][exec_month]
+                # Move to end of remaining_months so other months run first
+                if exec_month in state["remaining_months"]:
+                    state["remaining_months"].remove(exec_month)
+                    state["remaining_months"].append(exec_month)
                 logger.info(
-                    "Execution %s for %s (failure #%d); deferring to back of queue",
+                    "Execution %s for %s (failure #%d); moved to back of queue",
                     exec_status,
                     exec_month,
                     fail_count,
