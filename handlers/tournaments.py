@@ -61,6 +61,12 @@ def _load_federation_filter(bucket: str, year: int, month: int) -> frozenset | N
         codes = frozenset(
             code for code, months in country_months.items() if year_month in months
         )
+        if not codes:
+            logger.warning(
+                "Country-month lookup has no federations for %s; querying all federations",
+                year_month,
+            )
+            return None
         logger.info(
             "Country-month lookup loaded: %d/%d federations have data for %s",
             len(codes),

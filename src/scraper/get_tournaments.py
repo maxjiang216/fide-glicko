@@ -783,11 +783,13 @@ def _scrape_exit_code(n_errors: int, n_total: int) -> int:
     """
     Return exit code for scrape outcome.
 
-    - 0: All federations succeeded (or no federations to process).
-    - 1: Any federation failed — fail so we don't use partial/incomplete data.
+    - 0: All federations succeeded.
+    - 1: Any federation failed, or no federations were queried (filter produced empty
+         set or federations list is empty — indicates a configuration problem, not a
+         legitimate empty month).
     """
     if n_total == 0:
-        return 0
+        return 1
     if n_errors > 0:
         return 1
     return 0
