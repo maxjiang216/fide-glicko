@@ -67,10 +67,10 @@ def lambda_handler(event: dict, context) -> dict:
     # Apply defaults for optional fields (SSM and execution may omit keys)
     out.setdefault("bucket", "fide-glicko")
     out.setdefault("override", False)
-    out.setdefault("chunk_size", 300)
+    out.setdefault("chunk_size", 175)
     out.setdefault("max_concurrency", 5)
-    out.setdefault("details_rate_limit", 0.33)
-    out.setdefault("reports_rate_limit", 0.33)
+    out.setdefault("details_rate_limit", 0.25)
+    out.setdefault("reports_rate_limit", 0.4)
     # Optional; Tournaments Lambda uses default 1 if null (avoid JSONPath missing-key errors)
     if "tournaments_max_concurrency" not in out:
         out["tournaments_max_concurrency"] = None
