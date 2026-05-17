@@ -862,7 +862,7 @@ def run(
         return 1
 
     try:
-        _, n_errors, n_total = asyncio.run(
+        tournaments, n_errors, n_total = asyncio.run(
             scrape_month(
                 year,
                 month,
@@ -875,6 +875,13 @@ def run(
                 federation_filter=federation_filter,
             )
         )
+        if n_total > 0 and len(tournaments) == 0 and n_errors == 0:
+            logger.error(
+                "Scraped %d federations with 0 errors but found 0 tournaments — "
+                "FIDE may be blocking or returning empty; failing to avoid writing empty output",
+                n_total,
+            )
+            return 1
         return _scrape_exit_code(n_errors, n_total)
     except Exception as e:
         logger.error("Fatal error: %s", e)
