@@ -783,11 +783,13 @@ def _scrape_exit_code(n_errors: int, n_total: int) -> int:
     """
     Return exit code for scrape outcome.
 
-    - 0: All federations succeeded (or no federations to process).
-    - 1: Any federation failed — fail so we don't use partial/incomplete data.
+    - 0: All federations succeeded.
+    - 1: Any federation failed, or no federations were queried (filter produced empty
+         set or federations list is empty — indicates a configuration problem, not a
+         legitimate empty month).
     """
     if n_total == 0:
-        return 0
+        return 1
     if n_errors > 0:
         return 1
     return 0
@@ -860,7 +862,7 @@ def run(
         return 1
 
     try:
-        _, n_errors, n_total = asyncio.run(
+        tournaments, n_errors, n_total = asyncio.run(
             scrape_month(
                 year,
                 month,
@@ -873,6 +875,13 @@ def run(
                 federation_filter=federation_filter,
             )
         )
+        if n_total > 0 and len(tournaments) == 0 and n_errors == 0:
+            logger.error(
+                "Scraped %d federations with 0 errors but found 0 tournaments — "
+                "FIDE may be blocking or returning empty; failing to avoid writing empty output",
+                n_total,
+            )
+            return 1
         return _scrape_exit_code(n_errors, n_total)
     except Exception as e:
         logger.error("Fatal error: %s", e)
