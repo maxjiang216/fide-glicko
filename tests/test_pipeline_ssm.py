@@ -68,10 +68,10 @@ def test_ensure_run_name_code_defaults_when_no_ssm(monkeypatch):
         {"input": {"year": 2025, "month": 3, "run_type": "prod"}},
         None,
     )
-    assert out["chunk_size"] == 300
+    assert out["chunk_size"] == 175
     assert out["max_concurrency"] == 5
-    assert out["details_rate_limit"] == 0.33
-    assert out["reports_rate_limit"] == 0.33
+    assert out["details_rate_limit"] == 0.25
+    assert out["reports_rate_limit"] == 0.4
 
 
 def test_load_ssm_skips_without_lambda_env_even_if_param_set(monkeypatch):
