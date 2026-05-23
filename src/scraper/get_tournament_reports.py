@@ -1555,17 +1555,29 @@ def run(
 
         result = {"tournament_code": code}
         if report is None:
-            if error in SKIPPABLE_ERRORS:
-                # No usable report data — skip and record for audit
+            error_str = error or ""
+            is_timeout_exhausted = (
+                "max retries exceeded" in error_str and "timeout" in error_str
+            )
+            if error in SKIPPABLE_ERRORS or is_timeout_exhausted:
+                # No usable report data — skip and record for audit.
+                # Timeout-exhausted: tournament has been permanently unreachable
+                # across all retries; skip rather than block the whole chunk.
+                if is_timeout_exhausted:
+                    logger.warning(
+                        "Skipping tournament %s after exhausting retries with timeout: %s",
+                        code,
+                        error_str[:200],
+                    )
                 result["success"] = False
-                result["error"] = error
-                skipped_reports.append({"tournament_code": code, "error": error})
+                result["error"] = error_str
+                skipped_reports.append({"tournament_code": code, "error": error_str})
                 all_results.append(result)
                 if pbar:
                     pbar.update(1)
                 continue
             raise RuntimeError(
-                f"Report fetch failed for tournament {code}: {error or 'unknown'}; "
+                f"Report fetch failed for tournament {code}: {error_str or 'unknown'}; "
                 "aborting chunk so Step Function can retry with fresh Lambda"
             ) from None
 
