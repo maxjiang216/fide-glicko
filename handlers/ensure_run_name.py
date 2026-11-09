@@ -7,8 +7,8 @@ For test: run_name defaults to "test" when omitted.
 
 When the handler runs in **AWS Lambda** (Step Functions), optional tuning is
 merged from SSM (``PIPELINE_CONFIG_SSM_PARAM``) for any key omitted from the
-execution input: chunk_size, max_concurrency, tournaments_max_concurrency,
-details_rate_limit, reports_rate_limit. Local runs do not read SSM.
+execution input: chunk_size, max_concurrency, details_rate_limit,
+reports_rate_limit, tournaments_rate_limit. Local runs do not read SSM.
 Precedence: execution input > SSM JSON > code defaults below.
 
 Event shape (passthrough from execution input):
@@ -22,7 +22,8 @@ Event shape (passthrough from execution input):
     "max_concurrency": 1,
     "chunk_size": 175,
     "details_rate_limit": 0.3,
-    "reports_rate_limit": 0.3
+    "reports_rate_limit": 0.3,
+    "tournaments_rate_limit": 0.3
 }
 
 Returns the same input with run_name set. Fails with 400 if validation fails.
@@ -71,7 +72,5 @@ def lambda_handler(event: dict, context) -> dict:
     out.setdefault("max_concurrency", 1)
     out.setdefault("details_rate_limit", 0.3)
     out.setdefault("reports_rate_limit", 0.3)
-    # Optional; Tournaments Lambda uses default 1 if null (avoid JSONPath missing-key errors)
-    if "tournaments_max_concurrency" not in out:
-        out["tournaments_max_concurrency"] = None
+    out.setdefault("tournaments_rate_limit", 0.3)
     return out

@@ -679,6 +679,17 @@ async def scrape_month(
                             max(1, rem_ms // 60_000),
                         )
 
+    # Never write a partial list: a month must not start from missing IDs.
+    if errors or _shutdown_requested:
+        logger.error(
+            "Not writing tournament IDs for %d-%02d: %d federation error(s)%s",
+            year,
+            month,
+            len(errors),
+            ", shutdown requested" if _shutdown_requested else "",
+        )
+        return [], max(1, len(errors)), len(federations)
+
     # Write concatenated raw JSON from all federations (single file to reduce PUT costs)
     if raw_tournaments_uri and raw_items:
         compressed = build_concatenated_gzip(raw_items)

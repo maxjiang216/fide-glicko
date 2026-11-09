@@ -54,10 +54,17 @@
         "run_name.$": "$.run_name",
         "bucket.$": "$.bucket",
         "override.$": "$.override",
-        "tournaments_max_concurrency.$": "$.tournaments_max_concurrency"
+        "tournaments_rate_limit.$": "$.tournaments_rate_limit"
       },
       "ResultPath": "$.tournaments",
       "Retry": [
+        {
+          "ErrorEquals": ["FideBlocked"],
+          "IntervalSeconds": 1800,
+          "MaxAttempts": 5,
+          "BackoffRate": 2,
+          "MaxDelaySeconds": 14400
+        },
         {
           "ErrorEquals": ["Lambda.ServiceException", "Lambda.TooManyRequestsException"],
           "IntervalSeconds": 2,
@@ -72,7 +79,33 @@
           "Next": "PipelineFailed"
         }
       ],
-      "Next": "ParallelSplitIdsAndPlayerList"
+      "Next": "TournamentsProgress"
+    },
+
+    "TournamentsProgress": {
+      "Type": "Choice",
+      "Comment": "Resumable: call again while federations remain and the last call made progress",
+      "Choices": [
+        {
+          "And": [
+            {"Variable": "$.tournaments.remaining", "NumericGreaterThan": 0},
+            {"Variable": "$.tournaments.progress", "NumericGreaterThan": 0}
+          ],
+          "Next": "Tournaments"
+        },
+        {
+          "Variable": "$.tournaments.remaining",
+          "NumericGreaterThan": 0,
+          "Next": "TournamentsStuck"
+        }
+      ],
+      "Default": "ParallelSplitIdsAndPlayerList"
+    },
+
+    "TournamentsStuck": {
+      "Type": "Fail",
+      "Error": "TournamentsStuck",
+      "Cause": "A tournaments call made no progress while federations remain. See the tournaments Lambda logs (chunk_summary failed_sample)."
     },
 
     "ParallelSplitIdsAndPlayerList": {
@@ -166,7 +199,7 @@
         "tournaments.$": "$.tournaments",
         "parallel_split_player.$": "$.parallel_split_player",
         "chunk_size.$": "$.chunk_size",
-        "tournaments_max_concurrency.$": "$.tournaments_max_concurrency",
+        "tournaments_rate_limit.$": "$.tournaments_rate_limit",
         "details_rate_limit.$": "$.details_rate_limit",
         "reports_rate_limit.$": "$.reports_rate_limit",
         "max_concurrency": 1

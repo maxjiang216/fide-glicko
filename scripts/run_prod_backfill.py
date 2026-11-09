@@ -175,16 +175,16 @@ def main() -> int:
     parser.add_argument(
         "--max-concurrency",
         type=int,
-        default=5,
-        help="Map state concurrency per execution (default: 5)",
+        default=None,
+        help="Map state concurrency per execution (default: omit = SSM/code default 1). "
+        "Above 1 brings back parallel bursts against FIDE",
     )
     parser.add_argument(
-        "--tournaments-max-concurrency",
-        type=int,
+        "--tournaments-rate-limit",
+        type=float,
         default=None,
-        metavar="N",
-        help="Tournaments Lambda: parallel federation requests (default: omit = 1). "
-        "Raise if tournaments step hits 900s Sandbox.Timedout",
+        metavar="REQ_S",
+        help="Tournaments step request rate (default: omit = SSM/code default 0.3)",
     )
     parser.add_argument(
         "--chunk-size",
@@ -301,12 +301,13 @@ def main() -> int:
             "run_type": "prod",
             "bucket": args.bucket,
             "override": args.override,
-            "max_concurrency": args.max_concurrency,
         }
+        if args.max_concurrency is not None:
+            input_dict["max_concurrency"] = args.max_concurrency
         if args.chunk_size is not None:
             input_dict["chunk_size"] = args.chunk_size
-        if args.tournaments_max_concurrency is not None:
-            input_dict["tournaments_max_concurrency"] = args.tournaments_max_concurrency
+        if args.tournaments_rate_limit is not None:
+            input_dict["tournaments_rate_limit"] = args.tournaments_rate_limit
         if args.details_rate_limit is not None:
             input_dict["details_rate_limit"] = args.details_rate_limit
         if args.reports_rate_limit is not None:
