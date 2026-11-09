@@ -158,6 +158,12 @@ def test_parts_round_trip(tmp_path):
             Outcome("3", SKIP, {"tournament_code": "3", "error": "no data found"}),
         ]
     )
+    # A single "no data found" is provisional (could be an error page)...
+    assert done_ids("b", base, "details", **io_) == {"1"}
+    # ...confirmed once a second, separate run sees it too.
+    details_flush(
+        [Outcome("3", SKIP, {"tournament_code": "3", "error": "no data found"})]
+    )
     assert done_ids("b", base, "details", **io_) == {"1", "3"}
 
     report = {
@@ -185,3 +191,17 @@ def test_parts_round_trip(tmp_path):
     assert cov.missing_details == ["2"]
     assert cov.missing_reports == ["3"]
     assert (month / "raw" / "details").exists() and (month / "raw" / "reports").exists()
+
+
+def test_block_reports_partial_progress():
+    def process(tid):
+        if tid == "3":
+            raise FideBlocked("blocked")
+        return _ok(tid)
+
+    with pytest.raises(FideBlocked) as ei:
+        run_chunk(
+            ["1", "2", "3"], set(), process, lambda outs: "p", deadline=float("inf")
+        )
+    assert ei.value.chunk_result["progress"] == 2
+    assert ei.value.chunk_result["remaining"] == 1

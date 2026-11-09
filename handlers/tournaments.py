@@ -31,7 +31,11 @@ from pathlib import Path
 import boto3
 from botocore.exceptions import ClientError
 
-from .chunk_common import deadline_from_context, rate_limit_req_s
+from .chunk_common import (
+    deadline_from_context,
+    hard_deadline_from_context,
+    rate_limit_req_s,
+)
 from .lambda_logging import configure
 from s3_io import (
     build_run_base,
@@ -107,7 +111,10 @@ def _s3_io(bucket: str, base: str):
         return s3.get_object(Bucket=b, Key=k)["Body"].read().decode("utf-8")
 
     def delete_parts(codes) -> None:
-        keys = [{"Key": f"{parts_prefix}{c}.json"} for c in codes]
+        # Delete every part under the prefix, not just this federation set:
+        # leftovers from an interrupted refresh with a different set would
+        # otherwise make every later run look like a refresh in progress.
+        keys = [{"Key": k} for k, _ in list_s3_objects(bucket, parts_prefix)]
         for i in range(0, len(keys), 1000):
             s3.delete_objects(Bucket=bucket, Delete={"Objects": keys[i : i + 1000]})
 
@@ -191,7 +198,9 @@ def lambda_handler(event: dict, context) -> dict:
     )
 
     rate = rate_limit_req_s(event, "tournaments_rate_limit", 0.3)
-    fetcher = PoliteFetcher(AdaptiveRateLimiter(rate))
+    fetcher = PoliteFetcher(
+        AdaptiveRateLimiter(rate), hard_deadline=hard_deadline_from_context(context)
+    )
     logger.info(
         "Tournament list %d-%02d: %d federations at %.2f req/s",
         year,
@@ -222,6 +231,7 @@ def lambda_handler(event: dict, context) -> dict:
             fetcher=fetcher,
             session=make_session(),
             deadline=deadline_from_context(context),
+            expect_data=fed_filter or frozenset(),
             **io,
         )
     except FideBlocked as e:

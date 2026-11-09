@@ -24,23 +24,23 @@ import io
 import json
 import logging
 import re
-import secrets
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
 from typing import Callable, Iterable
 
 import pyarrow as pa
 import pyarrow.compute as pc
 
-logger = logging.getLogger(__name__)
-
-# Reasons a tournament legitimately has no report (FIDE page structure, not
-# network). Must match get_tournament_reports.SKIPPABLE_ERRORS.
-SKIPPABLE_ERRORS = frozenset(
-    ["report_updated_or_replaced", "no data found", "no players found"]
+from pipeline_common import (  # noqa: F401 (re-exported)
+    GIVE_UP_AFTER_RUNS,
+    SKIP_CONFIRMATIONS,
+    STRONG_SKIP_REASONS,
+    DETAILS_SKIPPABLE_ERRORS,
+    SKIPPABLE_ERRORS,
+    parse_ids,
+    part_stamp,
 )
-# Details page exists but has no details table.
-DETAILS_SKIPPABLE_ERRORS = frozenset(["no data found"])
+
+logger = logging.getLogger(__name__)
 
 _STAMP = r"\d{8}T\d{6}_[0-9a-f]{6}"
 DETAILS_FILE_RE = re.compile(rf"details_(chunk_\d+(_of_\d+)?|{_STAMP})\.parquet$")
@@ -52,6 +52,8 @@ REPORTS_SKIPPED_RE = re.compile(
     rf"reports_(chunk_\d+(_of_\d+)?|{_STAMP})_skipped\.json$"
 )
 DETAILS_SKIPPED_RE = re.compile(rf"details_{_STAMP}_skipped\.json$")
+DETAILS_FAILURES_RE = re.compile(rf"details_{_STAMP}_failures\.json$")
+REPORTS_FAILURES_RE = re.compile(rf"reports_{_STAMP}_failures\.json$")
 
 # Prefixes (relative to the month base) and the files expected there.
 DETAILS_PREFIXES = ("data/tournament_details_chunks/", "data/tournament_details_parts/")
@@ -61,6 +63,11 @@ REPORTS_SKIPPED_PREFIXES = (
     "reports/tournament_reports_parts/",
 )
 DETAILS_SKIPPED_PREFIXES = ("reports/tournament_details_parts/",)
+# Per-invocation failure records written by chunk workers.
+FAILURES_PREFIX = {
+    "details": "reports/tournament_details_failures/",
+    "reports": "reports/tournament_reports_failures/",
+}
 
 ListObjects = Callable[[str, str], list[tuple[str, object]]]
 ReadBytes = Callable[[str, str], bytes]
@@ -70,12 +77,6 @@ class IncompleteRunError(RuntimeError):
     """A month is missing details or reports for some tournaments."""
 
 
-def part_stamp() -> str:
-    """Unique, time-sortable part name: 20261109T143000_a1b2c3."""
-    now = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
-    return f"{now}_{secrets.token_hex(3)}"
-
-
 @dataclass
 class Coverage:
     expected: int
@@ -83,6 +84,8 @@ class Coverage:
     missing_reports: list[str] = field(default_factory=list)
     skipped_details: int = 0
     skipped_reports: int = 0
+    gave_up_details: list[str] = field(default_factory=list)
+    gave_up_reports: list[str] = field(default_factory=list)
 
     @property
     def complete(self) -> bool:
@@ -97,6 +100,11 @@ class Coverage:
             "skipped_reports": self.skipped_reports,
             "missing_details_sample": self.missing_details[:sample],
             "missing_reports_sample": self.missing_reports[:sample],
+            # Failed in GIVE_UP_AFTER_RUNS separate runs; accepted as missing.
+            "gave_up_details": len(self.gave_up_details),
+            "gave_up_reports": len(self.gave_up_reports),
+            "gave_up_details_ids": self.gave_up_details,
+            "gave_up_reports_ids": self.gave_up_reports,
         }
 
     def raise_if_incomplete(self, what: str) -> None:
@@ -107,16 +115,6 @@ class Coverage:
                 f"(e.g. details {self.missing_details[:5]}, "
                 f"reports {self.missing_reports[:5]})"
             )
-
-
-def parse_ids(text: str) -> list[str]:
-    """Tournament IDs from tournament_ids.txt contents, order kept, duplicates dropped."""
-    seen: dict[str, None] = {}
-    for line in text.splitlines():
-        tid = line.strip()
-        if tid:
-            seen.setdefault(tid, None)
-    return list(seen)
 
 
 def tournament_ids(table: pa.Table, col: str = "tournament_id") -> set[str]:
@@ -136,11 +134,28 @@ def successful_details(table: pa.Table) -> pa.Table:
 def skippable_ids(
     skipped_entries: Iterable[dict], reasons: frozenset = SKIPPABLE_ERRORS
 ) -> set[str]:
-    return {
-        str(e.get("tournament_code"))
-        for e in skipped_entries
-        if e.get("error") in reasons and e.get("tournament_code") is not None
-    }
+    """
+    Tournaments confirmed to have no usable page. A skip whose reason is in
+    STRONG_SKIP_REASONS (FIDE's explicit wording) counts at once. Other reasons
+    ("no data found", "no players found") only mean an expected table was
+    missing, which a maintenance or error page served with HTTP 200 would also
+    cause, so they count only once seen in SKIP_CONFIRMATIONS separate files
+    (separate worker runs). Entries carry their source file in "_file".
+    """
+    from collections import defaultdict
+
+    weak_files: dict[str, set] = defaultdict(set)
+    ok: set[str] = set()
+    for i, e in enumerate(skipped_entries):
+        tid, err = e.get("tournament_code"), e.get("error")
+        if tid is None or err not in reasons:
+            continue
+        if err in STRONG_SKIP_REASONS:
+            ok.add(str(tid))
+        else:
+            weak_files[str(tid)].add(e.get("_file", i))
+    ok |= {t for t, files in weak_files.items() if len(files) >= SKIP_CONFIRMATIONS}
+    return ok
 
 
 def compute_coverage(
@@ -149,20 +164,35 @@ def compute_coverage(
     reports_done: set[str],
     skipped_ok: set[str],
     details_skipped_ok: set[str] = frozenset(),
+    details_gave_up: set[str] = frozenset(),
+    reports_gave_up: set[str] = frozenset(),
 ) -> Coverage:
+    d_missing = [
+        t for t in expected_ids if t not in details_done and t not in details_skipped_ok
+    ]
+    r_missing = [
+        t for t in expected_ids if t not in reports_done and t not in skipped_ok
+    ]
     return Coverage(
         expected=len(expected_ids),
-        missing_details=[
-            t
-            for t in expected_ids
-            if t not in details_done and t not in details_skipped_ok
-        ],
-        missing_reports=[
-            t for t in expected_ids if t not in reports_done and t not in skipped_ok
-        ],
+        missing_details=[t for t in d_missing if t not in details_gave_up],
+        missing_reports=[t for t in r_missing if t not in reports_gave_up],
         skipped_details=sum(1 for t in expected_ids if t in details_skipped_ok),
         skipped_reports=sum(1 for t in expected_ids if t in skipped_ok),
+        gave_up_details=[t for t in d_missing if t in details_gave_up],
+        gave_up_reports=[t for t in r_missing if t in reports_gave_up],
     )
+
+
+def gave_up_ids(failure_files: list[list[dict]]) -> set[str]:
+    """IDs that failed in at least GIVE_UP_AFTER_RUNS separate failure files
+    (one file per worker invocation)."""
+    from collections import Counter
+
+    counts: Counter = Counter()
+    for entries in failure_files:
+        counts.update({str(e.get("tournament_code")) for e in entries})
+    return {t for t, n in counts.items() if n >= GIVE_UP_AFTER_RUNS}
 
 
 def concat_unified(tables: list[pa.Table]) -> pa.Table:
@@ -269,6 +299,8 @@ class MonthFiles:
     games: list[str]
     reports_skipped: list[str]
     details_skipped: list[str]
+    details_failures: list[str] = field(default_factory=list)
+    reports_failures: list[str] = field(default_factory=list)
 
     def counts(self) -> dict[str, int]:
         return {
@@ -293,6 +325,8 @@ def list_month_files(
         games=k(REPORTS_PREFIXES, GAMES_FILE_RE),
         reports_skipped=k(REPORTS_SKIPPED_PREFIXES, REPORTS_SKIPPED_RE),
         details_skipped=k(DETAILS_SKIPPED_PREFIXES, DETAILS_SKIPPED_RE),
+        details_failures=k((FAILURES_PREFIX["details"],), DETAILS_FAILURES_RE),
+        reports_failures=k((FAILURES_PREFIX["reports"],), REPORTS_FAILURES_RE),
     )
 
 
@@ -300,10 +334,15 @@ def _read_json_entries(read_bytes: ReadBytes, bucket: str, keys: list[str]) -> l
     entries: list[dict] = []
     for k in keys:
         try:
-            entries.extend(json.loads(read_bytes(bucket, k)))
+            entries.extend({**e, "_file": k} for e in json.loads(read_bytes(bucket, k)))
         except (ValueError, TypeError) as e:
             logger.warning("Unreadable skipped file %s: %s", k, e)
     return entries
+
+
+def _read_json_files(read_bytes: ReadBytes, bucket: str, keys: list[str]) -> list:
+    """One entry list per file (used to count failures per invocation)."""
+    return [_read_json_entries(read_bytes, bucket, [k]) for k in keys]
 
 
 def _read_tables(
@@ -351,12 +390,18 @@ def done_ids(
         )
         done = set().union(*(tournament_ids(successful_details(t)) for t in tables))
         skipped = _read_json_entries(read_bytes, bucket, files.details_skipped)
-        return done | skippable_ids(skipped, DETAILS_SKIPPABLE_ERRORS)
+        gave_up = gave_up_ids(
+            _read_json_files(read_bytes, bucket, files.details_failures)
+        )
+        return done | skippable_ids(skipped, DETAILS_SKIPPABLE_ERRORS) | gave_up
     if kind == "reports":
         tables = _read_tables(read_bytes, bucket, files.players, ["tournament_id"])
         done = set().union(*(tournament_ids(t) for t in tables))
         skipped = _read_json_entries(read_bytes, bucket, files.reports_skipped)
-        return done | skippable_ids(skipped)
+        gave_up = gave_up_ids(
+            _read_json_files(read_bytes, bucket, files.reports_failures)
+        )
+        return done | skippable_ids(skipped) | gave_up
     raise ValueError(f"kind must be details or reports (got {kind!r})")
 
 
@@ -376,6 +421,22 @@ def load_skipped(
     )
 
 
+def load_gave_up(
+    bucket: str,
+    base: str,
+    *,
+    list_objects: ListObjects | None = None,
+    read_bytes: ReadBytes | None = None,
+) -> tuple[set[str], set[str]]:
+    """(details given up, reports given up) for the month."""
+    list_objects, read_bytes = _default_io(list_objects, read_bytes)
+    files = list_month_files(bucket, base, list_objects)
+    return (
+        gave_up_ids(_read_json_files(read_bytes, bucket, files.details_failures)),
+        gave_up_ids(_read_json_files(read_bytes, bucket, files.reports_failures)),
+    )
+
+
 @dataclass
 class MonthData:
     """Every stored chunk and part for one month, merged and deduplicated."""
@@ -387,6 +448,8 @@ class MonthData:
     skipped: list[dict]
     details_skipped: list[dict]
     files: dict[str, int]
+    details_gave_up: set = field(default_factory=set)
+    reports_gave_up: set = field(default_factory=set)
 
     def coverage(self) -> Coverage:
         return compute_coverage(
@@ -395,6 +458,8 @@ class MonthData:
             tournament_ids(self.players),
             skippable_ids(self.skipped),
             skippable_ids(self.details_skipped, DETAILS_SKIPPABLE_ERRORS),
+            self.details_gave_up,
+            self.reports_gave_up,
         )
 
 
@@ -461,4 +526,6 @@ def load_month(
         skipped,
         details_skipped,
         files.counts(),
+        gave_up_ids(_read_json_files(read_bytes, bucket, files.details_failures)),
+        gave_up_ids(_read_json_files(read_bytes, bucket, files.reports_failures)),
     )

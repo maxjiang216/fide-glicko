@@ -44,11 +44,24 @@ def rate_limit_req_s(event: dict, key: str, default: float) -> float:
     return f if f >= 0 else default
 
 
-def deadline_from_context(context) -> float:
-    remaining_s = LOCAL_BUDGET_S + STOP_MARGIN_S
+# Time kept back at the very end for writing the final part file.
+SAVE_MARGIN_S = 30
+
+
+def _remaining_s(context) -> float:
     if context is not None and hasattr(context, "get_remaining_time_in_millis"):
-        remaining_s = context.get_remaining_time_in_millis() / 1000
-    return time.monotonic() + remaining_s - STOP_MARGIN_S
+        return context.get_remaining_time_in_millis() / 1000
+    return LOCAL_BUDGET_S + STOP_MARGIN_S
+
+
+def deadline_from_context(context) -> float:
+    """Soft deadline: no new tournament is started after this."""
+    return time.monotonic() + _remaining_s(context) - STOP_MARGIN_S
+
+
+def hard_deadline_from_context(context) -> float:
+    """Hard deadline: no fetch attempt (or retry) may run past this."""
+    return time.monotonic() + _remaining_s(context) - SAVE_MARGIN_S
 
 
 def validate_event(event: dict) -> None:
@@ -107,7 +120,9 @@ def run_chunk_lambda(kind: str, event: dict, context) -> dict:
     deadline = deadline_from_context(context)
     done = done_ids(bucket, base, kind)
     rate = rate_limit_req_s(event, f"{kind}_rate_limit", 0.3)
-    fetcher = PoliteFetcher(AdaptiveRateLimiter(rate))
+    fetcher = PoliteFetcher(
+        AdaptiveRateLimiter(rate), hard_deadline=hard_deadline_from_context(context)
+    )
     session = make_session()
 
     if kind == "details":
@@ -145,12 +160,29 @@ def run_chunk_lambda(kind: str, event: dict, context) -> dict:
     try:
         result = run_chunk(ids, done, process, flush, deadline=deadline)
     except FideBlocked as e:
-        summarize(None, True, str(e))
+        summarize(getattr(e, "chunk_result", None), True, str(e))
         raise
     except Exception as e:
-        summarize(None, False, f"{type(e).__name__}: {e}")
+        summarize(getattr(e, "chunk_result", None), False, f"{type(e).__name__}: {e}")
         raise
     summarize(result.to_dict(), False)
+    if result.failed:
+        # One record per invocation; a tournament failing in several separate
+        # runs is given up on (coverage.gave_up_ids) instead of blocking the
+        # month forever.
+        import json
+
+        from coverage import FAILURES_PREFIX
+        from pipeline_common import part_stamp
+        from s3_io import write_output
+
+        write_output(
+            json.dumps(
+                [{"tournament_code": t, "error": e} for t, e in result.failed],
+                indent=2,
+            ),
+            f"{month_root}/{FAILURES_PREFIX[kind]}{kind}_{part_stamp()}_failures.json",
+        )
     return {
         "statusCode": 200,
         "success": True,

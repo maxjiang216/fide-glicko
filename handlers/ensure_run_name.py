@@ -29,7 +29,11 @@ Event shape (passthrough from execution input):
 Returns the same input with run_name set. Fails with 400 if validation fails.
 """
 
+import logging
+
 from .pipeline_ssm import load_pipeline_config_from_ssm
+
+logger = logging.getLogger(__name__)
 
 
 def lambda_handler(event: dict, context) -> dict:
@@ -73,4 +77,12 @@ def lambda_handler(event: dict, context) -> dict:
     out.setdefault("details_rate_limit", 0.3)
     out.setdefault("reports_rate_limit", 0.3)
     out.setdefault("tournaments_rate_limit", 0.3)
+    # FIDE blocks per IP: one chunk at a time unless parallelism is asked for
+    # explicitly. (Map MaxConcurrency 0 would mean unlimited.)
+    if out.get("max_concurrency") != 1 and not out.get("allow_parallel"):
+        logger.warning(
+            "max_concurrency=%r ignored; using 1 (set allow_parallel to override)",
+            out.get("max_concurrency"),
+        )
+        out["max_concurrency"] = 1
     return out

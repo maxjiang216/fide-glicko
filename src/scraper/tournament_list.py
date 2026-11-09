@@ -21,7 +21,7 @@ import logging
 from typing import Optional
 
 from chunk_worker import FAIL, OK, Outcome, run_chunk
-from coverage import parse_ids, part_stamp
+from pipeline_common import parse_ids, part_stamp
 
 logger = logging.getLogger(__name__)
 
@@ -103,6 +103,7 @@ def run_tournament_list(
     write: callable,
     exists: callable,
     delete_parts: callable,
+    expect_data: frozenset = frozenset(),
 ) -> dict:
     """
     Fetch missing federation parts, then finalize tournament_ids.txt if all
@@ -142,20 +143,32 @@ def run_tournament_list(
     out = res.to_dict()
     if res.remaining > 0:
         return {**out, "finalized": False}
-    result = finalize(month_root, federations, read_text, write, exists)
+    result = finalize(month_root, federations, read_text, write, exists, expect_data)
     delete_parts(federations)
     return {**out, **result}
 
 
-def finalize(month_root, federations, read_text, write, exists) -> dict:
+def finalize(
+    month_root, federations, read_text, write, exists, expect_data=frozenset()
+) -> dict:
     from raw_utils import build_concatenated_gzip
 
     parts_root = f"{month_root}/{PARTS_DIR}"
     texts = {code: read_text(f"{parts_root}/{code}.json") for code in federations}
     seen: dict[str, object] = {}
+    empty_expected = []
     for code in federations:
-        for t in parse_part(code, texts[code]):
+        parsed = parse_part(code, texts[code])
+        if not parsed and code in expect_data:
+            empty_expected.append(code)
+        for t in parsed:
             seen.setdefault(t.tournament_id, t)
+    if empty_expected:
+        # Could be genuine (lookup out of date) or a bad response; surfaced, not
+        # fatal, so a real empty federation can never stall the month.
+        logger.warning(
+            "Federations expected to have data returned none: %s", empty_expected
+        )
     if not seen:
         raise RuntimeError(
             f"{len(federations)} federations returned 0 tournaments; FIDE may be "
@@ -211,4 +224,10 @@ def finalize(month_root, federations, read_text, write, exists) -> dict:
     # Written last: its presence means the list is complete.
     write(ids_path, "\n".join(ids) + "\n")
     logger.info("Wrote %d tournament IDs to %s", len(ids), ids_path)
-    return {"finalized": True, "tournaments": len(ids), "ids_path": ids_path, **changes}
+    return {
+        "finalized": True,
+        "tournaments": len(ids),
+        "ids_path": ids_path,
+        "empty_expected_federations": empty_expected,
+        **changes,
+    }

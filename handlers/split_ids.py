@@ -18,7 +18,7 @@ Event shape:
 - ids_uri: Path to tournament IDs file. If not set, uses {base}/data/tournament_ids.txt.
   Must exist; Step Function runs tournaments Lambda first.
 - chunk_size: Max tournaments per chunk (default: 300).
-- override: Overwrite existing chunk files (default: false).
+- override: Ignored; chunk files are always rewritten from tournament_ids.txt.
 
 Returns: { statusCode, success, chunks: [{ input_path, output_path, tournament_count, chunk_index }, ...] }
 """
@@ -93,7 +93,11 @@ def lambda_handler(event: dict, context) -> dict:
         chunk_size=chunk_size,
         bucket=bucket,
         output_prefix=build_run_base(run_type, run_name),
-        override=override,
+        # Always rewrite: chunk files must match the current tournament_ids.txt.
+        # Keeping old files (same chunk count, refreshed list) would leave new
+        # IDs unscraped and the month stuck. Workers skip done tournaments, so
+        # rewriting is cheap and safe.
+        override=True,
         quiet=False,
     )
 

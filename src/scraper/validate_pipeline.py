@@ -211,6 +211,10 @@ def validate_details_vs_reports(
     }
 
 
+# Written only by a validation that passed the coverage check (see run()).
+COMPLETE_MARKER = "coverage_complete.json"
+
+
 def _summarize_skipped(entries: list[dict]) -> dict:
     """{"total": N, "by_error": {"no data found": [ids...], ...}}"""
     by_error: dict[str, list[str]] = {}
@@ -226,6 +230,8 @@ def merged_coverage(
     players_path: Path,
     details_skipped: list[dict],
     reports_skipped: list[dict],
+    details_gave_up: set = frozenset(),
+    reports_gave_up: set = frozenset(),
 ):
     """Coverage of tournament_ids.txt by the merged parquet files."""
     import pyarrow.parquet as pq
@@ -249,6 +255,8 @@ def merged_coverage(
         reports_done,
         skippable_ids(reports_skipped),
         skippable_ids(details_skipped, DETAILS_SKIPPABLE_ERRORS),
+        details_gave_up,
+        reports_gave_up,
     )
 
 
@@ -329,9 +337,10 @@ def run(
             ),
             tmp_path / "tournament_ids.txt",
         )
-        from coverage import load_skipped
+        from coverage import load_gave_up, load_skipped
 
         details_skipped, reports_skipped = load_skipped(bucket, base)
+        details_gave_up, reports_gave_up = load_gave_up(bucket, base)
         skipped = _summarize_skipped(reports_skipped)
         skipped["details"] = _summarize_skipped(details_skipped)
 
@@ -343,6 +352,8 @@ def run(
             rp_path,
             details_skipped,
             reports_skipped,
+            details_gave_up,
+            reports_gave_up,
         )
         cov.raise_if_incomplete(f"Validation of {base}")
 
@@ -374,6 +385,17 @@ def run(
 
     report_uri = f"s3://{bucket}/{base}/reports/validation_report.json"
     write_output(json.dumps(report_dict, indent=2, default=str), report_uri)
+
+    # Completion marker the orchestrator keys on. Only reached when coverage is
+    # complete (raise_if_incomplete above). Old runs wrote validation_report.json
+    # for incomplete months, so that file alone does not mean "done".
+    marker_uri = f"s3://{bucket}/{base}/reports/{COMPLETE_MARKER}"
+    write_output(
+        json.dumps(
+            {"schema": 2, "coverage": cov.summary(sample=0), "report": report_uri}
+        ),
+        marker_uri,
+    )
 
     logger.info(
         "Validation report written to %s (has_issues=%s)", report_uri, has_issues

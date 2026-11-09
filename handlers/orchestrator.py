@@ -81,8 +81,12 @@ def _active_backfill_months(bucket: str) -> list[str]:
 
 def _scan_incomplete_months(bucket: str, all_months: list[str]) -> list[str]:
     """
-    List all prod/*/reports/validation_report.json keys in one S3 paginated call,
-    then return the months that do NOT have a validation report.
+    List prod/*/reports/coverage_complete.json keys in one S3 paginated call,
+    then return the months that do NOT have one.
+
+    The marker is written only by a validation that verified every tournament
+    in the month's ID list is stored. validation_report.json alone is not
+    enough: the old pipeline wrote it for months missing whole chunks.
     """
     s3 = boto3.client("s3")
     found: set[str] = set()
@@ -90,8 +94,8 @@ def _scan_incomplete_months(bucket: str, all_months: list[str]) -> list[str]:
     for page in paginator.paginate(Bucket=bucket, Prefix="prod/"):
         for obj in page.get("Contents", []):
             key = obj["Key"]
-            if key.endswith("/reports/validation_report.json"):
-                # key looks like prod/2006-01/reports/validation_report.json
+            if key.endswith("/reports/coverage_complete.json"):
+                # key looks like prod/2006-01/reports/coverage_complete.json
                 parts = key.split("/")
                 if len(parts) >= 2:
                     found.add(parts[1])

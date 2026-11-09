@@ -59,7 +59,7 @@ def chunk_summary(
         "remaining": cr.get("remaining"),
         "already_done": cr.get("already_done"),
         "failed": cr.get("failed"),
-        "stopped": cr.get("stopped", "blocked" if blocked else "error"),
+        "stopped": "blocked" if blocked else cr.get("stopped", "error"),
     }
     present = [(n, u) for n, u in METRICS if record.get(n) is not None]
     record["_aws"] = {

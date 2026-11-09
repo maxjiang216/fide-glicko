@@ -34,7 +34,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Callable, Optional
 
-from coverage import DETAILS_SKIPPABLE_ERRORS, SKIPPABLE_ERRORS, part_stamp
+from pipeline_common import DETAILS_SKIPPABLE_ERRORS, SKIPPABLE_ERRORS, part_stamp
 
 logger = logging.getLogger(__name__)
 
@@ -121,9 +121,15 @@ def run_chunk(
                 buffer.append(out)
             if len(buffer) >= flush_every or clock() - last_flush >= flush_secs:
                 do_flush()
-    finally:
-        # Runs on FideBlocked and any other error too: never lose fetched work.
-        do_flush()
+    except BaseException as exc:
+        # FideBlocked or any other error: save fetched work first, then attach
+        # what was done so the caller can still report progress.
+        try:
+            do_flush()
+        finally:
+            exc.chunk_result = res.to_dict()  # type: ignore[attr-defined]
+        raise
+    do_flush()
     logger.info("Chunk result: %s", res.to_dict())
     return res
 

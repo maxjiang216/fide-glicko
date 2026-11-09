@@ -25,7 +25,8 @@ link_or_copy() {
 declare -A REQS
 REQS[federations]="requests>=2.32.5
 beautifulsoup4>=4.14.3"
-REQS[tournaments]="aiohttp>=3.10.0"
+REQS[tournaments]="aiohttp>=3.10.0
+requests>=2.32.5"
 REQS[split_ids]=""
 REQS[ensure_run_name]=""
 REQS[orchestrator]=""

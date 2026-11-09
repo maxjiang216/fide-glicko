@@ -194,3 +194,20 @@ def test_fetcher_stats_count_signals():
     assert st["strain_errors"] == 1 and st["block_signals"] == 1
     assert st["slowdowns"] == 1 and st["final_rate"] == pytest.approx(0.2)
     assert st["latency_p50_s"] is not None
+
+
+def test_http_403_is_a_block():
+    assert is_block_error("HTTP 403")
+
+
+def test_no_retry_when_attempt_would_pass_hard_deadline():
+    clock = FakeClock()
+    lim = _limiter(clock, rate=0.4)
+    f = PoliteFetcher(lim, sleep=clock.sleep, clock=clock, hard_deadline=50.0)
+    fetch, calls = _script("HTTP 502", None)
+    data, err, _, _ = f.fetch("x", fetch)
+    assert err == "HTTP 502" and len(calls) == 1  # 60s attempt would not fit
+    fetch, calls = _script(CONNECT_TIMEOUT, None)
+    with pytest.raises(FideBlocked):  # no time to wait 30s + retry: stop now
+        f.fetch("y", fetch)
+    assert len(calls) == 1

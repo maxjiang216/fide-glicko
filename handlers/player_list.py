@@ -37,20 +37,14 @@ def lambda_handler(event: dict, context) -> dict:
         override,
     )
 
-    try:
-        players_list_uri = run_shared(
-            bucket=bucket,
-            override=override,
-            quiet=False,
-            federations_uri=federations_uri,
-        )
-    except RuntimeError as e:
-        logger.error("Player list download failed: %s", e)
-        return {
-            "statusCode": 500,
-            "success": False,
-            "error": str(e),
-        }
+    # Raises on failure so Step Functions sees it; otherwise validate would
+    # silently use an old player list.
+    players_list_uri = run_shared(
+        bucket=bucket,
+        override=override,
+        quiet=False,
+        federations_uri=federations_uri,
+    )
 
     logger.info("Player list download completed successfully: %s", players_list_uri)
     return {

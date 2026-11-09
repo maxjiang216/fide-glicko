@@ -36,7 +36,7 @@ def test_ensure_run_name_applies_ssm_when_key_not_in_input(monkeypatch):
         None,
     )
     assert out["chunk_size"] == 150
-    assert out["max_concurrency"] == 8
+    assert out["max_concurrency"] == 1  # clamped: parallelism needs allow_parallel
     assert out["details_rate_limit"] == 0.4
     assert out["reports_rate_limit"] == 0.25
 
@@ -59,7 +59,20 @@ def test_ensure_run_name_execution_input_overrides_ssm(monkeypatch):
         None,
     )
     assert out["chunk_size"] == 200
-    assert out["max_concurrency"] == 10
+    assert out["max_concurrency"] == 1  # clamped: parallelism needs allow_parallel
+
+
+def test_parallelism_only_with_explicit_opt_in(monkeypatch):
+    monkeypatch.setattr(ensure_run_name, "load_pipeline_config_from_ssm", lambda: {})
+    base = {"year": 2025, "month": 3, "run_type": "prod"}
+    out = ensure_run_name.lambda_handler(
+        {"input": {**base, "max_concurrency": 0}}, None
+    )
+    assert out["max_concurrency"] == 1  # 0 would mean unlimited in a Map state
+    out = ensure_run_name.lambda_handler(
+        {"input": {**base, "max_concurrency": 3, "allow_parallel": True}}, None
+    )
+    assert out["max_concurrency"] == 3
 
 
 def test_ensure_run_name_code_defaults_when_no_ssm(monkeypatch):

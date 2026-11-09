@@ -42,7 +42,7 @@ USER_AGENT = (
 # Connection never established: the firewall is dropping or refusing us.
 _BLOCK_RE = re.compile(
     r"connect ?timeout|connecttimeout|errno 111|connection refused"
-    r"|failed to establish a new connection",
+    r"|failed to establish a new connection|http 403",
     re.I,
 )
 # Server reachable but struggling or shedding load.
@@ -172,6 +172,10 @@ class PoliteFetcher:
     limiter: AdaptiveRateLimiter
     block_retry_wait_s: float = 30.0
     strain_retries: int = 3
+    # Absolute clock() time by which fetch() must have returned (Lambda end
+    # minus time to save work). A retry is only made if a whole attempt fits.
+    hard_deadline: float = float("inf")
+    attempt_budget_s: float = 60.0  # 15s connect + 45s read
     sleep: Callable[[float], None] = time.sleep
     clock: Callable[[], float] = time.monotonic
     # Counters for monitoring (see metrics.py)
@@ -220,7 +224,11 @@ class PoliteFetcher:
                 return result
             if is_block_error(error):
                 self.block_signals += 1
-                if block_retried:
+                no_time = (
+                    self.clock() + self.block_retry_wait_s + self.attempt_budget_s
+                    > self.hard_deadline
+                )
+                if block_retried or no_time:
                     raise FideBlocked(
                         f"FIDE blocking this IP ({label}: {error}); stopping so the "
                         "run can wait instead of grinding"
@@ -238,5 +246,10 @@ class PoliteFetcher:
             self.strain_errors += 1
             self.limiter.slow_down(f"{label}: {error}")
             if strain_left <= 0:
+                return result
+            if self.clock() + self.attempt_budget_s > self.hard_deadline:
+                logger.warning(
+                    "No time left to retry %s; leaving it for next run", label
+                )
                 return result
             strain_left -= 1

@@ -222,3 +222,28 @@ def test_handlers_raise_on_bad_input(module):
     mod = __import__(f"handlers.{module}", fromlist=["lambda_handler"])
     with pytest.raises(ValueError, match="run_type"):
         mod.lambda_handler({"run_type": "nope"}, None)
+
+
+def test_weak_skip_needs_two_runs_strong_skip_does_not():
+    from coverage import skippable_ids
+
+    one = [{"tournament_code": "1", "error": "no data found", "_file": "a"}]
+    assert skippable_ids(one) == set()
+    two = one + [{"tournament_code": "1", "error": "no data found", "_file": "b"}]
+    assert skippable_ids(two) == {"1"}
+    same_file = one + [{"tournament_code": "1", "error": "no data found", "_file": "a"}]
+    assert skippable_ids(same_file) == set()
+    strong = [
+        {"tournament_code": "2", "error": "report_updated_or_replaced", "_file": "a"}
+    ]
+    assert skippable_ids(strong) == {"2"}
+
+
+def test_failures_in_three_runs_are_given_up():
+    from coverage import compute_coverage, gave_up_ids
+
+    runs = [[{"tournament_code": "9", "error": "HTTP 404"}]] * 3
+    assert gave_up_ids(runs[:2]) == set()
+    assert gave_up_ids(runs) == {"9"}
+    cov = compute_coverage(["8", "9"], {"8", "9"}, {"8"}, set(), set(), set(), {"9"})
+    assert cov.complete and cov.gave_up_reports == ["9"]

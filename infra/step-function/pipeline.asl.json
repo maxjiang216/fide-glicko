@@ -66,6 +66,12 @@
           "MaxDelaySeconds": 14400
         },
         {
+          "ErrorEquals": ["Sandbox.Timedout"],
+          "IntervalSeconds": 30,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        },
+        {
           "ErrorEquals": ["Lambda.ServiceException", "Lambda.TooManyRequestsException"],
           "IntervalSeconds": 2,
           "MaxAttempts": 3,
@@ -266,6 +272,7 @@
               {
                 "ErrorEquals": [
                   "Lambda.ClientExecutionTimeoutException",
+                  "Sandbox.Timedout",
                   "Lambda.SdkClientException",
                   "Lambda.Unknown"
                 ],
@@ -331,6 +338,7 @@
               {
                 "ErrorEquals": [
                   "Lambda.ClientExecutionTimeoutException",
+                  "Sandbox.Timedout",
                   "Lambda.SdkClientException",
                   "Lambda.Unknown"
                 ],

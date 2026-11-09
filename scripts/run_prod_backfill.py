@@ -82,7 +82,13 @@ def fetch_available_periods() -> list[tuple[int, int]]:
     Returns empty list on failure (caller falls back to unfiltered range).
     """
     url = f"{PERIODS_URL}?country={REFERENCE_FED}&periods_tab=1"
-    headers = {"X-Requested-With": "XMLHttpRequest"}
+    import sys
+    from pathlib import Path
+
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src" / "scraper"))
+    from fide_http import USER_AGENT
+
+    headers = {"X-Requested-With": "XMLHttpRequest", "User-Agent": USER_AGENT}
     try:
         resp = requests.get(url, headers=headers, timeout=15)
         if resp.status_code != 200:
@@ -151,7 +157,15 @@ def main() -> int:
         "-c",
         type=int,
         default=1,
-        help="Max concurrent Step Function executions (default: 1)",
+        help="Max concurrent Step Function executions (default: 1). Above 1 "
+        "needs --allow-parallel: each execution has its own rate limiter, so FIDE "
+        "sees the rates added together",
+    )
+    parser.add_argument(
+        "--allow-parallel",
+        action="store_true",
+        help="Permit --concurrency/--max-concurrency above 1 and starting while "
+        "another execution is running",
     )
     parser.add_argument(
         "--state-machine-arn",
@@ -215,6 +229,15 @@ def main() -> int:
 
     if args.concurrency < 1:
         logger.error("--concurrency must be >= 1")
+        return 1
+    if not args.allow_parallel and (
+        args.concurrency > 1
+        or (args.max_concurrency is not None and args.max_concurrency != 1)
+    ):
+        logger.error(
+            "Parallel scraping needs --allow-parallel (FIDE blocks per IP; one "
+            "worker at a time is the default)"
+        )
         return 1
 
     try:
@@ -281,6 +304,18 @@ def main() -> int:
         logger.error(
             "State machine %r not found. Deploy the stack or pass --state-machine-arn",
             STATE_MACHINE_NAME,
+        )
+        return 1
+
+    already = client.list_executions(
+        stateMachineArn=arn, statusFilter="RUNNING", maxResults=10
+    ).get("executions", [])
+    if already and not args.allow_parallel:
+        logger.error(
+            "%d execution(s) already running (e.g. %s, maybe the orchestrator). "
+            "Wait for them or pass --allow-parallel",
+            len(already),
+            already[0]["name"],
         )
         return 1
 
