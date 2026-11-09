@@ -138,3 +138,9 @@ EnsureRunName → RefreshTournamentLists → BuildQueue
 4. **Rerun `build_glicko_input.py` and the Rust evaluation/tuning; update FINDINGS.md.** The tuned `vol=0.09` result in particular may partly reflect missing games, which look like inactivity to Glicko-2.
 
 Optional: email FIDE's ratings administration to describe the project and ask about allowlisting or a bulk export.
+
+---
+
+## Run log
+
+- **2026-11-09, first deployed test (branch `fix/gentle-pipeline`, commit 89ebda3):** prod 2024-04, execution `manual-2024-04-20261109053021`, existing ID list (no refresh), 0.3 req/s, one chunk at a time. Waiter job `runs` name `sfn-2024-04`. Check: execution SUCCEEDED; `prod/2024-04/reports/coverage_complete.json` exists; dashboard `fide-glicko-scrape` shows no blocks; coverage summary in validation_report.json (missing 0, given-up count). Before: 876 missing details, 2,047 missing reports.

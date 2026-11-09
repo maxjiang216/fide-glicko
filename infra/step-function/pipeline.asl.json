@@ -28,6 +28,13 @@
       "ResultPath": "$.federations",
       "Retry": [
         {
+          "ErrorEquals": ["FideBlocked"],
+          "IntervalSeconds": 1800,
+          "MaxAttempts": 5,
+          "BackoffRate": 2,
+          "MaxDelaySeconds": 14400
+        },
+        {
           "ErrorEquals": ["Lambda.ServiceException", "Lambda.TooManyRequestsException"],
           "IntervalSeconds": 2,
           "MaxAttempts": 3,
