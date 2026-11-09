@@ -169,7 +169,7 @@
         "tournaments_max_concurrency.$": "$.tournaments_max_concurrency",
         "details_rate_limit.$": "$.details_rate_limit",
         "reports_rate_limit.$": "$.reports_rate_limit",
-        "max_concurrency": 5
+        "max_concurrency": 1
       },
       "Next": "MapDetailsAndReports"
     },
@@ -212,6 +212,13 @@
             "ResultPath": "$.details_result",
             "Retry": [
               {
+                "ErrorEquals": ["FideBlocked"],
+                "IntervalSeconds": 1800,
+                "MaxAttempts": 5,
+                "BackoffRate": 2,
+                "MaxDelaySeconds": 14400
+              },
+              {
                 "ErrorEquals": ["Lambda.TooManyRequestsException"],
                 "IntervalSeconds": 10,
                 "MaxAttempts": 6,
@@ -250,6 +257,13 @@
               "reports_rate_limit.$": "$.reports_rate_limit"
             },
             "Retry": [
+              {
+                "ErrorEquals": ["FideBlocked"],
+                "IntervalSeconds": 1800,
+                "MaxAttempts": 5,
+                "BackoffRate": 2,
+                "MaxDelaySeconds": 14400
+              },
               {
                 "ErrorEquals": ["Lambda.TooManyRequestsException"],
                 "IntervalSeconds": 10,

@@ -27,6 +27,8 @@ from typing import Dict, List, Optional, Tuple
 
 import pandas as pd
 import requests
+
+from fide_http import AdaptiveRateLimiter, PoliteFetcher
 from bs4 import BeautifulSoup
 from tqdm import tqdm
 
@@ -436,6 +438,7 @@ def fetch_tournament_report(
     *,
     _attempt_log: Optional[List[Dict]] = None,
     return_raw: bool = False,
+    max_attempts: int = 2,
 ) -> Tuple[Optional[Dict], Optional[str], int, Optional[bytes]]:
     """
     Fetch tournament report from FIDE website.
@@ -447,7 +450,7 @@ def fetch_tournament_report(
     """
     url = f"https://ratings.fide.com/tournament_src_report.phtml?code={tournament_code}"
 
-    max_retries = 2
+    max_retries = max_attempts
     # Fail fast on connect: 15s to establish, 45s to read (large report pages)
     connect_timeout, read_timeout = 15, 45
     last_error = None
@@ -1542,15 +1545,18 @@ def run(
             bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}]",
         )
 
-    rate_limiter = RateLimiter(rate_limit) if rate_limit > 0 else None
+    fetcher = PoliteFetcher(AdaptiveRateLimiter(rate_limit))
 
     start_time = time.time()
 
     for code in current_codes:
-        if rate_limiter:
-            rate_limiter.wait()
-        report, error, _, raw_content = fetch_tournament_report(
-            code, session, return_raw=save_raw
+        # Raises FideBlocked if FIDE is blocking us; strain is retried
+        # (slower) inside the fetcher.
+        report, error, _, raw_content = fetcher.fetch(
+            f"report {code}",
+            lambda **kw: fetch_tournament_report(
+                code, session, return_raw=save_raw, **kw
+            ),
         )
 
         result = {"tournament_code": code}

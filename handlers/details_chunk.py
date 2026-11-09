@@ -17,7 +17,7 @@ Event shape:
 - bucket: S3 bucket (default: fide-glicko)
 - override: If true, overwrite existing output (default: false)
 - save_raw: If true, save raw HTML to raw/details/details_chunk_{i}.html.gz (default: true)
-- details_rate_limit: Requests per second to FIDE (default: 0.33; 0 = unlimited)
+- details_rate_limit: Requests per second to FIDE (default: 0.3; 0 = unlimited)
 """
 
 import logging
@@ -64,7 +64,7 @@ def lambda_handler(event: dict, context) -> dict:
     bucket = event.get("bucket", "fide-glicko")
     override = event.get("override", False)
     save_raw = event.get("save_raw", True)
-    rate_limit = _rate_limit_req_s(event, "details_rate_limit", 0.33)
+    rate_limit = _rate_limit_req_s(event, "details_rate_limit", 0.3)
 
     if run_type not in ("prod", "custom", "test"):
         raise ValueError(

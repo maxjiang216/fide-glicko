@@ -25,6 +25,8 @@ from typing import Dict, List, Optional, Tuple
 import pandas as pd
 import pyarrow.parquet as pq
 import requests
+
+from fide_http import AdaptiveRateLimiter, PoliteFetcher
 from bs4 import BeautifulSoup
 from tqdm import tqdm
 
@@ -240,6 +242,7 @@ def fetch_tournament_details(
     *,
     _attempt_log: Optional[List[Dict]] = None,
     return_raw: bool = False,
+    max_attempts: int = 3,
 ) -> Tuple[Optional[Dict], Optional[str], int, Optional[bytes]]:
     """
     Fetch tournament details from FIDE website.
@@ -250,7 +253,7 @@ def fetch_tournament_details(
     """
     url = f"https://ratings.fide.com/tournament_information.phtml?event={tournament_id}"
 
-    max_retries = 3
+    max_retries = max_attempts
     last_error = None
     attempt_times: List[float] = []
 
@@ -891,7 +894,7 @@ def run(
     )
     session.mount("http://", adapter)
     session.mount("https://", adapter)
-    rate_limiter = RateLimiter(rate_limit)
+    fetcher = PoliteFetcher(AdaptiveRateLimiter(rate_limit))
 
     raw_base: Optional[str] = (
         _raw_base_from_output_path(output_path) if save_raw else None
@@ -914,8 +917,6 @@ def run(
         )
 
     start_time = time.time()
-    consecutive_connect_timeouts = 0
-    CONSECUTIVE_CONNECT_TIMEOUT_THRESHOLD = 2
 
     for pass_num in range(max_retries + 1):
         if not current_tournaments:
@@ -930,13 +931,16 @@ def run(
             )
             time.sleep(delay)
             total_retries += len(current_tournaments)
-            consecutive_connect_timeouts = 0  # reset on new pass
 
         pass_failed = []
         for tournament_id in current_tournaments:
-            rate_limiter.wait()
-            details, error, _, raw_content = fetch_tournament_details(
-                tournament_id, session, return_raw=save_raw
+            # Raises FideBlocked if FIDE is blocking us; strain is retried
+            # (slower) inside the fetcher.
+            details, error, _, raw_content = fetcher.fetch(
+                f"details {tournament_id}",
+                lambda **kw: fetch_tournament_details(
+                    tournament_id, session, return_raw=save_raw, **kw
+                ),
             )
 
             result = {"tournament_id": tournament_id}
@@ -950,21 +954,6 @@ def run(
                 result["success"] = False
                 result["error"] = error or "fetch failed"
                 error_lower = (error or "").lower()
-                is_connect_timeout = (
-                    "connect" in error_lower and "timeout" in error_lower
-                ) or "connecttimeout" in error_lower
-                if is_connect_timeout:
-                    consecutive_connect_timeouts += 1
-                    if (
-                        consecutive_connect_timeouts
-                        >= CONSECUTIVE_CONNECT_TIMEOUT_THRESHOLD
-                    ):
-                        raise RuntimeError(
-                            f"Details fetch: {CONSECUTIVE_CONNECT_TIMEOUT_THRESHOLD} consecutive "
-                            "connect timeouts; aborting chunk so Step Function can retry with fresh Lambda"
-                        ) from None
-                else:
-                    consecutive_connect_timeouts = 0
                 network_error_patterns = [
                     "eof",
                     "connection reset",
@@ -981,7 +970,6 @@ def run(
                 ):
                     pass_failed.append(tournament_id)
             else:
-                consecutive_connect_timeouts = 0
                 success_count += 1
                 result["success"] = True
                 result["details"] = details

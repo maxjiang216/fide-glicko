@@ -16,6 +16,17 @@ Parameters:
       in AWS Console (Parameter Store) without redeploying. Omitted execution
       input keys are filled from this object; see infra/step-function/README.md.
 
+  AlertEmail:
+    Type: String
+    Default: ""
+    Description: >
+      Email address notified when a pipeline execution fails or times out (for
+      example after FideBlocked retries run out). Empty = topic only, no email.
+      AWS sends a confirmation email that must be accepted once.
+
+Conditions:
+  HasAlertEmail: !Not [!Equals [!Ref AlertEmail, ""]]
+
 Globals:
   Function:
     Timeout: 60
@@ -246,9 +257,62 @@ Resources:
                 - !GetAtt LambdaImageMergeChunks.Arn
                 - !GetAtt LambdaImageValidate.Arn
 
+  PipelineAlertsTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: fide-glicko-pipeline-alerts
+
+  PipelineAlertsTopicPolicy:
+    Type: AWS::SNS::TopicPolicy
+    Properties:
+      Topics:
+        - !Ref PipelineAlertsTopic
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: events.amazonaws.com
+            Action: sns:Publish
+            Resource: !Ref PipelineAlertsTopic
+
+  PipelineAlertsEmailSubscription:
+    Type: AWS::SNS::Subscription
+    Condition: HasAlertEmail
+    Properties:
+      TopicArn: !Ref PipelineAlertsTopic
+      Protocol: email
+      Endpoint: !Ref AlertEmail
+
+  # A failed run should never sit unnoticed (e.g. FIDE blocking us for >12h).
+  PipelineFailedRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: fide-glicko-pipeline-failed
+      Description: Notify when a pipeline execution fails, times out or is aborted
+      EventPattern:
+        source:
+          - aws.states
+        detail-type:
+          - Step Functions Execution Status Change
+        detail:
+          status:
+            - FAILED
+            - TIMED_OUT
+            - ABORTED
+          stateMachineArn:
+            - !Ref PipelineStateMachine
+      Targets:
+        - Id: alerts-topic
+          Arn: !Ref PipelineAlertsTopic
+
 Outputs:
   PipelineStateMachineArn:
     Description: Step Functions state machine ARN
     Value: !Ref PipelineStateMachine
     Export:
       Name: !Sub "${AWS::StackName}-PipelineArn"
+
+  PipelineAlertsTopicArn:
+    Description: SNS topic for pipeline failure alerts
+    Value: !Ref PipelineAlertsTopic

@@ -142,7 +142,9 @@
     {
       "Sid": "StepFunctionsValidate",
       "Effect": "Allow",
-      "Action": ["states:ValidateStateMachineDefinition"],
+      "Action": [
+        "states:ValidateStateMachineDefinition"
+      ],
       "Resource": "*"
     },
     {
@@ -161,6 +163,23 @@
         "events:UntagResource"
       ],
       "Resource": "arn:aws:events:us-east-1:710271917035:rule/fide-glicko-*"
+    },
+    {
+      "Sid": "SNS",
+      "Effect": "Allow",
+      "Action": [
+        "sns:CreateTopic",
+        "sns:DeleteTopic",
+        "sns:GetTopicAttributes",
+        "sns:SetTopicAttributes",
+        "sns:Subscribe",
+        "sns:Unsubscribe",
+        "sns:GetSubscriptionAttributes",
+        "sns:ListSubscriptionsByTopic",
+        "sns:TagResource",
+        "sns:UntagResource"
+      ],
+      "Resource": "arn:aws:sns:us-east-1:710271917035:fide-glicko-*"
     }
   ]
 }

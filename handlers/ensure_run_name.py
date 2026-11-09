@@ -19,10 +19,10 @@ Event shape (passthrough from execution input):
     "run_name": null,
     "bucket": "fide-glicko",
     "override": false,
-    "max_concurrency": 5,
-    "chunk_size": 300,
-    "details_rate_limit": 0.33,
-    "reports_rate_limit": 0.33
+    "max_concurrency": 1,
+    "chunk_size": 175,
+    "details_rate_limit": 0.3,
+    "reports_rate_limit": 0.3
 }
 
 Returns the same input with run_name set. Fails with 400 if validation fails.
@@ -67,10 +67,10 @@ def lambda_handler(event: dict, context) -> dict:
     # Apply defaults for optional fields (SSM and execution may omit keys)
     out.setdefault("bucket", "fide-glicko")
     out.setdefault("override", False)
-    out.setdefault("chunk_size", 300)
-    out.setdefault("max_concurrency", 5)
-    out.setdefault("details_rate_limit", 0.33)
-    out.setdefault("reports_rate_limit", 0.33)
+    out.setdefault("chunk_size", 175)
+    out.setdefault("max_concurrency", 1)
+    out.setdefault("details_rate_limit", 0.3)
+    out.setdefault("reports_rate_limit", 0.3)
     # Optional; Tournaments Lambda uses default 1 if null (avoid JSONPath missing-key errors)
     if "tournaments_max_concurrency" not in out:
         out["tournaments_max_concurrency"] = None

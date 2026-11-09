@@ -19,7 +19,7 @@ Event shape:
 - override: If true, overwrite existing output (default: false)
 - save_raw: If true, save raw HTML to raw/reports/reports_chunk_{i}.html.gz (default: true)
 - details_path: Optional S3 URI to details chunk parquet for date inference.
-- reports_rate_limit: Requests per second to FIDE (default: 0.33; 0 = unlimited)
+- reports_rate_limit: Requests per second to FIDE (default: 0.3; 0 = unlimited)
 
 Outputs: parquet, plus reports_chunk_{i}_verbose_sample.json and reports_chunk_{i}_games_sample.csv.
 When tournaments have no original report (page says "updated or replaced"), writes
@@ -74,7 +74,7 @@ def lambda_handler(event: dict, context) -> dict:
     override = event.get("override", False)
     save_raw = event.get("save_raw", True)
     details_path = event.get("details_path")
-    rate_limit = _rate_limit_req_s(event, "reports_rate_limit", 0.33)
+    rate_limit = _rate_limit_req_s(event, "reports_rate_limit", 0.3)
 
     if run_type not in ("prod", "custom", "test"):
         raise ValueError(
