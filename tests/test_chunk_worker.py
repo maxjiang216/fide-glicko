@@ -15,7 +15,9 @@ from chunk_worker import (
     SKIP,
     Outcome,
     details_flusher,
+    details_processor,
     reports_flusher,
+    reports_processor,
     run_chunk,
 )
 from coverage import done_ids, load_month
@@ -100,15 +102,60 @@ def test_failures_count_as_remaining_not_progress():
     assert res.failed == [("2", "HTTP 503")]
 
 
-def test_skips_count_as_progress():
+def test_final_skips_count_as_done():
     res = run_chunk(
         ["1"],
         set(),
-        lambda t: Outcome(t, SKIP, {"tournament_code": t, "error": "no data found"}),
+        lambda t: Outcome(
+            t, SKIP, {"tournament_code": t, "error": "report_updated_or_replaced"}
+        ),
         lambda outs: "p",
         deadline=float("inf"),
     )
     assert res.progress == 1 and res.remaining == 0
+
+
+def test_weak_skip_saved_but_still_remaining():
+    """
+    A weak skip needs a second, separate run to confirm it (coverage). It is
+    saved (progress), but stays in remaining so the caller loops once more;
+    regression: prod 2024-04 ended with remaining=0 and merge refused 365437.
+    """
+    res = run_chunk(
+        ["1", "2"],
+        set(),
+        lambda t: (
+            Outcome(
+                t, SKIP, {"tournament_code": t, "error": "no data found"}, final=False
+            )
+            if t == "2"
+            else _ok(t)
+        ),
+        lambda outs: "p",
+        deadline=float("inf"),
+    )
+    assert res.progress == 2 and res.unconfirmed == 1 and res.remaining == 1
+
+
+@pytest.mark.parametrize(
+    "error,final", [("no data found", False), ("report_updated_or_replaced", True)]
+)
+def test_reports_processor_marks_weak_skips(error, final):
+    class Fetcher:
+        def fetch(self, label, fn):
+            return None, error, None, None
+
+    out = reports_processor(Fetcher(), None)("7")
+    assert out.status == SKIP and out.final is final
+
+
+def test_details_processor_marks_weak_skips():
+    class Fetcher:
+        def fetch(self, label, fn):
+            return None, "no data found", None, None
+
+    out = details_processor(Fetcher(), None)("7")
+    assert out.status == SKIP and out.final is False
 
 
 # --- part files round-trip through coverage -------------------------------

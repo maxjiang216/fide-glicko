@@ -34,7 +34,12 @@ import time
 from dataclasses import dataclass, field
 from typing import Callable, Optional
 
-from pipeline_common import DETAILS_SKIPPABLE_ERRORS, SKIPPABLE_ERRORS, part_stamp
+from pipeline_common import (
+    DETAILS_SKIPPABLE_ERRORS,
+    SKIPPABLE_ERRORS,
+    STRONG_SKIP_REASONS,
+    part_stamp,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +53,10 @@ class Outcome:
     result: Optional[dict] = None  # OK: row(s) source; SKIP: skipped entry
     raw: Optional[bytes] = None
     error: Optional[str] = None
+    # SKIP only: False for weak reasons, which coverage accepts only once seen
+    # in SKIP_CONFIRMATIONS separate parts. Such a skip is saved but still
+    # counted as remaining, so the caller runs again and confirms it.
+    final: bool = True
 
 
 @dataclass
@@ -55,19 +64,21 @@ class ChunkResult:
     chunk_size: int
     already_done: int
     progress: int = 0
+    unconfirmed: int = 0  # saved weak skips, still counted in remaining
     failed: list[tuple[str, str]] = field(default_factory=list)
     parts: list[str] = field(default_factory=list)
     stopped: str = "complete"  # complete | time_budget
 
     @property
     def remaining(self) -> int:
-        return self.chunk_size - self.already_done - self.progress
+        return self.chunk_size - self.already_done - self.progress + self.unconfirmed
 
     def to_dict(self) -> dict:
         return {
             "chunk_size": self.chunk_size,
             "already_done": self.already_done,
             "progress": self.progress,
+            "unconfirmed": self.unconfirmed,
             "remaining": self.remaining,
             "failed": len(self.failed),
             "failed_sample": [f"{t}: {e}" for t, e in self.failed[:10]],
@@ -98,6 +109,9 @@ def run_chunk(
         if buffer:
             res.parts.append(flush(buffer))
             res.progress += len(buffer)
+            res.unconfirmed += sum(
+                1 for o in buffer if o.status == SKIP and not o.final
+            )
         buffer = []
         last_flush = clock()
 
@@ -161,7 +175,12 @@ def details_processor(fetcher, session) -> Callable[[str], Outcome]:
                 raw,
             )
         if error in DETAILS_SKIPPABLE_ERRORS:
-            return Outcome(tid, SKIP, {"tournament_code": tid, "error": error})
+            return Outcome(
+                tid,
+                SKIP,
+                {"tournament_code": tid, "error": error},
+                final=error in STRONG_SKIP_REASONS,
+            )
         return Outcome(tid, FAIL, error=error)
 
     return process
@@ -212,7 +231,12 @@ def reports_processor(fetcher, session) -> Callable[[str], Outcome]:
                 code, OK, {"tournament_code": code, "success": True, **report}, raw
             )
         if error in SKIPPABLE_ERRORS:
-            return Outcome(code, SKIP, {"tournament_code": code, "error": error})
+            return Outcome(
+                code,
+                SKIP,
+                {"tournament_code": code, "error": error},
+                final=error in STRONG_SKIP_REASONS,
+            )
         return Outcome(code, FAIL, error=error)
 
     return process
