@@ -40,17 +40,11 @@ def lambda_handler(event: dict, context) -> dict:
     override = event.get("override", False)
 
     if run_type not in ("prod", "custom", "test"):
-        return {
-            "statusCode": 400,
-            "success": False,
-            "error": f"run_type must be one of prod, custom, test (got {run_type!r})",
-        }
+        raise ValueError(
+            f"run_type must be one of prod, custom, test (got {run_type!r})"
+        )
     if run_type in ("prod", "custom") and not run_name:
-        return {
-            "statusCode": 400,
-            "success": False,
-            "error": "run_name required when run_type is prod or custom",
-        }
+        raise ValueError("run_name required when run_type is prod or custom")
 
     logger.info(
         "Starting merge chunks: bucket=%s run_type=%s run_name=%s override=%s",
@@ -60,21 +54,13 @@ def lambda_handler(event: dict, context) -> dict:
         override,
     )
 
-    try:
-        result = run(
-            bucket=bucket,
-            run_type=run_type,
-            run_name=run_name,
-            override=override,
-            quiet=False,
-        )
-    except RuntimeError as e:
-        logger.error("Merge chunks failed: %s", e)
-        return {
-            "statusCode": 500,
-            "success": False,
-            "error": str(e),
-        }
+    result = run(
+        bucket=bucket,
+        run_type=run_type,
+        run_name=run_name,
+        override=override,
+        quiet=False,
+    )
 
     logger.info("Merge chunks completed successfully")
     return {

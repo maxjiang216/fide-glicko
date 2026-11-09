@@ -67,29 +67,15 @@ def lambda_handler(event: dict, context) -> dict:
     rate_limit = _rate_limit_req_s(event, "details_rate_limit", 0.33)
 
     if run_type not in ("prod", "custom", "test"):
-        return {
-            "statusCode": 400,
-            "success": False,
-            "error": f"run_type must be one of prod, custom, test (got {run_type!r})",
-        }
+        raise ValueError(
+            f"run_type must be one of prod, custom, test (got {run_type!r})"
+        )
     if run_type in ("prod", "custom") and not run_name:
-        return {
-            "statusCode": 400,
-            "success": False,
-            "error": "run_name required when run_type is prod or custom",
-        }
+        raise ValueError("run_name required when run_type is prod or custom")
     if chunk_index is None:
-        return {
-            "statusCode": 400,
-            "success": False,
-            "error": "chunk_index is required",
-        }
+        raise ValueError("chunk_index is required")
     if chunk_count is None:
-        return {
-            "statusCode": 400,
-            "success": False,
-            "error": "chunk_count is required",
-        }
+        raise ValueError("chunk_count is required")
 
     input_path = build_s3_uri_for_run(
         bucket,
@@ -142,13 +128,9 @@ def lambda_handler(event: dict, context) -> dict:
 
     if exit_code != 0:
         logger.error("Tournament details scrape failed with exit code %d", exit_code)
-        return {
-            "statusCode": 500,
-            "success": False,
-            "input_path": input_path,
-            "output_path": output_path,
-            "error": "Scrape failed",
-        }
+        raise RuntimeError(
+            f"Scrape failed (exit code {exit_code}): input={input_path} output={output_path}"
+        )
 
     logger.info("Tournament details scrape completed successfully")
     return {

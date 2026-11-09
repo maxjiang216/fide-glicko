@@ -242,6 +242,37 @@ def _collect_skipped_tournaments(bucket: str, base: str) -> dict:
     return {"total": total, "by_error": by_error}
 
 
+def merged_coverage(
+    ids_text: str,
+    details_path: Path,
+    players_path: Path,
+    games_path: Path,
+    skipped_by_error: dict[str, list[str]],
+):
+    """Coverage of tournament_ids.txt by the merged parquet files."""
+    import pyarrow.parquet as pq
+
+    from coverage import (
+        SKIPPABLE_ERRORS,
+        compute_coverage,
+        parse_ids,
+        successful_details,
+        tournament_ids,
+    )
+
+    details_done = tournament_ids(successful_details(pq.read_table(details_path)))
+    reports_done = tournament_ids(
+        pq.read_table(players_path, columns=["tournament_id"])
+    ) | tournament_ids(pq.read_table(games_path, columns=["tournament_id"]))
+    skipped_ok = {
+        tid
+        for err, tids in skipped_by_error.items()
+        if err in SKIPPABLE_ERRORS
+        for tid in tids
+    }
+    return compute_coverage(parse_ids(ids_text), details_done, reports_done, skipped_ok)
+
+
 def run(
     bucket: str,
     run_type: str,
@@ -307,10 +338,33 @@ def run(
         details_path = download_to_file(details_uri, tmp_path / "details.parquet")
         reports_path = download_to_file(reports_uri, tmp_path / "reports.parquet")
 
+        rp_path = download_to_file(
+            build_s3_uri_for_run(
+                bucket, run_type, run_name, "data", "tournament_reports_players.parquet"
+            ),
+            tmp_path / "reports_players.parquet",
+        )
+        ids_path = download_to_file(
+            build_s3_uri_for_run(
+                bucket, run_type, run_name, "data", "tournament_ids.txt"
+            ),
+            tmp_path / "tournament_ids.txt",
+        )
+        skipped = _collect_skipped_tournaments(bucket, base)
+
+        # "Done" means complete: never write validation_report.json for a month
+        # whose merged files are missing tournaments.
+        cov = merged_coverage(
+            ids_path.read_text(),
+            details_path,
+            rp_path,
+            reports_path,
+            skipped["by_error"],
+        )
+        cov.raise_if_incomplete(f"Validation of {base}")
+
         pl_result = validate_player_list_vs_reports(players_path, reports_path)
         dt_result = validate_details_vs_reports(details_path, reports_path)
-
-    skipped = _collect_skipped_tournaments(bucket, base)
 
     has_issues = False
     if "error" in pl_result:
@@ -329,6 +383,7 @@ def run(
         "run_type": run_type,
         "run_name": run_name or "",
         "has_issues": has_issues,
+        "coverage": cov.summary(),
         "skipped_tournaments": skipped,
         "player_list_vs_reports": pl_result,
         "details_vs_reports": dt_result,

@@ -234,13 +234,6 @@
                 "BackoffRate": 2
               }
             ],
-            "Catch": [
-              {
-                "ErrorEquals": ["States.ALL"],
-                "ResultPath": "$.error",
-                "Next": "ChunkFailed"
-              }
-            ],
             "Next": "ReportsChunk"
           },
           "ReportsChunk": {
@@ -281,23 +274,10 @@
               }
             ],
             "End": true
-          },
-          "ChunkFailed": {
-            "Type": "Pass",
-            "Result": {"error": "Chunk processing failed"},
-            "End": true
           }
         }
       },
       "ResultPath": "$.map_results",
-      "Retry": [
-        {
-          "ErrorEquals": ["States.ALL"],
-          "IntervalSeconds": 30,
-          "MaxAttempts": 4,
-          "BackoffRate": 2
-        }
-      ],
       "Catch": [
         {
           "ErrorEquals": ["States.ALL"],
