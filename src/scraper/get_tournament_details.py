@@ -636,19 +636,22 @@ def save_time_control_unique_values(results: List[Dict], output_path: str):
 _NULLABLE_NUMERIC_COLS = ("n_players",)
 
 
+def results_to_parquet_bytes(results: List[Dict]) -> bytes:
+    """Serialize details results to Parquet bytes."""
+    df = results_to_dataframe(results)
+    for col in _NULLABLE_NUMERIC_COLS:
+        if col in df.columns:
+            df[col] = df[col].astype("float64")
+    buf = io.BytesIO()
+    df.to_parquet(buf, index=False, engine="pyarrow")
+    return buf.getvalue()
+
+
 def save_results_parquet(results: List[Dict], parquet_path: str) -> None:
-    """Save results as Parquet file (local or S3)."""
-    try:
-        df = results_to_dataframe(results)
-        for col in _NULLABLE_NUMERIC_COLS:
-            if col in df.columns:
-                df[col] = df[col].astype("float64")
-        buf = io.BytesIO()
-        df.to_parquet(buf, index=False, engine="pyarrow")
-        _write_to_path(parquet_path, buf.getvalue())
-        logger.info(f"Saved {len(results)} records to {parquet_path}")
-    except Exception as e:
-        logger.error(f"Parquet save failed: {e}")
+    """Save results as Parquet file (local or S3). Raises on failure: a chunk
+    must never be reported done while its output is missing."""
+    _write_to_path(parquet_path, results_to_parquet_bytes(results))
+    logger.info(f"Saved {len(results)} records to {parquet_path}")
 
 
 def save_results_json_sample(

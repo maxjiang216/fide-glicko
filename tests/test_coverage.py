@@ -158,7 +158,13 @@ def test_load_month_unions_chunk_sets_and_reports_gaps():
     # (2 via page-structure skip).
     assert cov.missing_details == ["4"]
     assert cov.missing_reports == []
-    assert month.files == {"details": 2, "players": 2, "games": 2, "skipped": 1}
+    assert month.files == {
+        "details": 2,
+        "players": 2,
+        "games": 2,
+        "skipped": 1,
+        "details_skipped": 0,
+    }
     names = {r["tournament_id"]: r["name"] for r in month.details.to_pylist()}
     assert names == {"1": "new", "2": "old", "3": "new"}
 

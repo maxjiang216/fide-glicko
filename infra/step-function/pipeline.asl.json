@@ -241,7 +241,26 @@
                 "BackoffRate": 2
               }
             ],
-            "Next": "ReportsChunk"
+            "Next": "DetailsProgress"
+          },
+          "DetailsProgress": {
+            "Type": "Choice",
+            "Comment": "Resumable worker: call again while work remains and the last call made progress",
+            "Choices": [
+              {
+                "And": [
+                  {"Variable": "$.details_result.remaining", "NumericGreaterThan": 0},
+                  {"Variable": "$.details_result.progress", "NumericGreaterThan": 0}
+                ],
+                "Next": "DetailsChunk"
+              },
+              {
+                "Variable": "$.details_result.remaining",
+                "NumericGreaterThan": 0,
+                "Next": "ChunkStuck"
+              }
+            ],
+            "Default": "ReportsChunk"
           },
           "ReportsChunk": {
             "Type": "Task",
@@ -253,9 +272,9 @@
               "chunk_count.$": "$.chunk_count",
               "bucket.$": "$.bucket",
               "override.$": "$.override",
-              "save_raw": true,
               "reports_rate_limit.$": "$.reports_rate_limit"
             },
+            "ResultPath": "$.reports_result",
             "Retry": [
               {
                 "ErrorEquals": ["FideBlocked"],
@@ -287,11 +306,37 @@
                 "BackoffRate": 2
               }
             ],
-            "End": true
+            "Next": "ReportsProgress"
+          },
+          "ReportsProgress": {
+            "Type": "Choice",
+            "Choices": [
+              {
+                "And": [
+                  {"Variable": "$.reports_result.remaining", "NumericGreaterThan": 0},
+                  {"Variable": "$.reports_result.progress", "NumericGreaterThan": 0}
+                ],
+                "Next": "ReportsChunk"
+              },
+              {
+                "Variable": "$.reports_result.remaining",
+                "NumericGreaterThan": 0,
+                "Next": "ChunkStuck"
+              }
+            ],
+            "Default": "ChunkDone"
+          },
+          "ChunkDone": {
+            "Type": "Succeed"
+          },
+          "ChunkStuck": {
+            "Type": "Fail",
+            "Error": "ChunkStuck",
+            "Cause": "A chunk invocation made no progress while tournaments remain (repeated non-block errors). See the chunk Lambda logs for failed_sample."
           }
         }
       },
-      "ResultPath": "$.map_results",
+      "ResultPath": null,
       "Catch": [
         {
           "ErrorEquals": ["States.ALL"],

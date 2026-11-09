@@ -211,51 +211,30 @@ def validate_details_vs_reports(
     }
 
 
-def _collect_skipped_tournaments(bucket: str, base: str) -> dict:
-    """
-    Aggregate all *_skipped.json files written by reports_chunk into a summary.
-    Returns {"total": N, "by_error": {"no data found": [...], ...}}
-    """
-    import boto3
-
-    s3 = boto3.client("s3")
-    prefix = f"{base}/reports/tournament_reports_chunks/"
+def _summarize_skipped(entries: list[dict]) -> dict:
+    """{"total": N, "by_error": {"no data found": [ids...], ...}}"""
     by_error: dict[str, list[str]] = {}
-    paginator = s3.get_paginator("list_objects_v2")
-    for page in paginator.paginate(Bucket=bucket, Prefix=prefix):
-        for obj in page.get("Contents", []):
-            key = obj["Key"]
-            if not key.endswith("_skipped.json"):
-                continue
-            try:
-                body = s3.get_object(Bucket=bucket, Key=key)["Body"].read()
-                entries = json.loads(body)
-                for entry in entries:
-                    err = entry.get("error", "unknown")
-                    by_error.setdefault(err, []).append(
-                        str(entry.get("tournament_code", "?"))
-                    )
-            except Exception:
-                pass
-
-    total = sum(len(v) for v in by_error.values())
-    return {"total": total, "by_error": by_error}
+    for entry in entries:
+        err = entry.get("error", "unknown")
+        by_error.setdefault(err, []).append(str(entry.get("tournament_code", "?")))
+    return {"total": sum(len(v) for v in by_error.values()), "by_error": by_error}
 
 
 def merged_coverage(
     ids_text: str,
     details_path: Path,
     players_path: Path,
-    games_path: Path,
-    skipped_by_error: dict[str, list[str]],
+    details_skipped: list[dict],
+    reports_skipped: list[dict],
 ):
     """Coverage of tournament_ids.txt by the merged parquet files."""
     import pyarrow.parquet as pq
 
     from coverage import (
-        SKIPPABLE_ERRORS,
+        DETAILS_SKIPPABLE_ERRORS,
         compute_coverage,
         parse_ids,
+        skippable_ids,
         successful_details,
         tournament_ids,
     )
@@ -263,14 +242,14 @@ def merged_coverage(
     details_done = tournament_ids(successful_details(pq.read_table(details_path)))
     reports_done = tournament_ids(
         pq.read_table(players_path, columns=["tournament_id"])
-    ) | tournament_ids(pq.read_table(games_path, columns=["tournament_id"]))
-    skipped_ok = {
-        tid
-        for err, tids in skipped_by_error.items()
-        if err in SKIPPABLE_ERRORS
-        for tid in tids
-    }
-    return compute_coverage(parse_ids(ids_text), details_done, reports_done, skipped_ok)
+    )
+    return compute_coverage(
+        parse_ids(ids_text),
+        details_done,
+        reports_done,
+        skippable_ids(reports_skipped),
+        skippable_ids(details_skipped, DETAILS_SKIPPABLE_ERRORS),
+    )
 
 
 def run(
@@ -350,7 +329,11 @@ def run(
             ),
             tmp_path / "tournament_ids.txt",
         )
-        skipped = _collect_skipped_tournaments(bucket, base)
+        from coverage import load_skipped
+
+        details_skipped, reports_skipped = load_skipped(bucket, base)
+        skipped = _summarize_skipped(reports_skipped)
+        skipped["details"] = _summarize_skipped(details_skipped)
 
         # "Done" means complete: never write validation_report.json for a month
         # whose merged files are missing tournaments.
@@ -358,8 +341,8 @@ def run(
             ids_path.read_text(),
             details_path,
             rp_path,
-            reports_path,
-            skipped["by_error"],
+            details_skipped,
+            reports_skipped,
         )
         cov.raise_if_incomplete(f"Validation of {base}")
 

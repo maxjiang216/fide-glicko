@@ -1291,6 +1291,21 @@ SKIPPABLE_ERRORS = frozenset(
 )
 
 
+def details_map_from_df(
+    df: pd.DataFrame,
+) -> Dict[str, Tuple[Optional[str], Optional[str]]]:
+    """{event_code: (start_iso, end_iso)} from a details DataFrame, for date inference."""
+    details_map: Dict[str, Tuple[Optional[str], Optional[str]]] = {}
+    ec_col = "event_code" if "event_code" in df.columns else "id"
+    for _, row in df.iterrows():
+        ec = row.get(ec_col)
+        if pd.notna(ec) and str(ec):
+            sd = parse_details_date_to_iso(str(row.get("start_date", "")))
+            ed = parse_details_date_to_iso(str(row.get("end_date", "")))
+            details_map[str(ec)] = (sd, ed)
+    return details_map
+
+
 def save_skipped_json(skipped: List[Dict], base_path: str) -> None:
     """Save tournaments skipped (no original report) to JSON for reporting."""
     if not skipped:
@@ -1302,13 +1317,10 @@ def save_skipped_json(skipped: List[Dict], base_path: str) -> None:
 
 
 def save_players_parquet(results: List[Dict], parquet_path: str):
-    """Save players Parquet. PK: (player_id, tournament_id)."""
-    try:
-        df = results_to_players_dataframe(results)
-        _write_parquet_to_path(df, parquet_path)
-        logger.info(f"Saved {len(df)} player rows to {parquet_path}")
-    except Exception as e:
-        logger.error(f"Players Parquet save failed: {e}")
+    """Save players Parquet. PK: (player_id, tournament_id). Raises on failure."""
+    df = results_to_players_dataframe(results)
+    _write_parquet_to_path(df, parquet_path)
+    logger.info(f"Saved {len(df)} player rows to {parquet_path}")
 
 
 def save_games_parquet(
@@ -1316,14 +1328,12 @@ def save_games_parquet(
     parquet_path: str,
     details_map: Optional[Dict[str, Tuple[Optional[str], Optional[str]]]] = None,
 ):
-    """Save games as Parquet file (one row per game, main output format)."""
-    try:
-        df = results_to_games_dataframe(results, details_map=details_map)
-        _write_parquet_to_path(df, parquet_path)
-        logger.info(f"Saved {len(results)} tournament(s) to {parquet_path}")
-        logger.info(f"  Total games: {len(df)}")
-    except Exception as e:
-        logger.error(f"Games Parquet save failed: {e}")
+    """Save games as Parquet file (one row per game, main output format).
+    Raises on failure."""
+    df = results_to_games_dataframe(results, details_map=details_map)
+    _write_parquet_to_path(df, parquet_path)
+    logger.info(f"Saved {len(results)} tournament(s) to {parquet_path}")
+    logger.info(f"  Total games: {len(df)}")
 
 
 def _transform_results_round_dates_to_datetime(
@@ -1495,13 +1505,7 @@ def run(
                 df = pd.read_parquet(local_path)
             else:
                 df = pd.read_parquet(details_path)
-            ec_col = "event_code" if "event_code" in df.columns else "id"
-            for _, row in df.iterrows():
-                ec = row.get(ec_col)
-                if pd.notna(ec) and str(ec):
-                    sd = parse_details_date_to_iso(str(row.get("start_date", "")))
-                    ed = parse_details_date_to_iso(str(row.get("end_date", "")))
-                    details_map[str(ec)] = (sd, ed)
+            details_map = details_map_from_df(df)
             logger.info(
                 "Loaded date bounds for %d tournaments from %s",
                 len(details_map),
