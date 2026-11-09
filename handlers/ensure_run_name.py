@@ -77,6 +77,9 @@ def lambda_handler(event: dict, context) -> dict:
     out.setdefault("details_rate_limit", 0.3)
     out.setdefault("reports_rate_limit", 0.3)
     out.setdefault("tournaments_rate_limit", 0.3)
+    # Optional federations CSV to use instead of the latest one (e.g. a small
+    # subset for a test run). Always present so the ASL path resolves.
+    out.setdefault("federations_s3_uri", None)
     # FIDE blocks per IP: one chunk at a time unless parallelism is asked for
     # explicitly. (Map MaxConcurrency 0 would mean unlimited.)
     if out.get("max_concurrency") != 1 and not out.get("allow_parallel"):

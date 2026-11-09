@@ -32,6 +32,11 @@ bash scripts/prepare_functions.sh
 # Build SAM stack
 sam build --cached
 
+# End-to-end local test before deploying: real Lambdas (sam local) + Step Functions
+# Local, small custom run (3-federation CSV), validates the real ASL with AWS first
+uv run scripts/local_pipeline_test.py --year 2015 --month 6 --run-name localtest-2015-06 \
+    --federations-s3-uri s3://fide-glicko/custom/localtest-feds/federations.csv
+
 # Deploy (local, requires AWS CLI configured)
 sam deploy
 ```
