@@ -23,6 +23,8 @@ from typing import Any, List, Optional, Tuple, Union
 
 import aiohttp
 
+from fide_http import USER_AGENT
+
 from raw_utils import build_concatenated_gzip
 from s3_io import (
     build_local_path_for_run,
@@ -238,6 +240,7 @@ async def fetch_federation_tournaments(
 
     # Simple headers that work with curl - no need for Referer or Origin
     headers = {
+        "User-Agent": USER_AGENT,
         "X-Requested-With": "XMLHttpRequest",
         "Accept": "application/json, text/javascript, */*; q=0.01",
     }
@@ -331,7 +334,7 @@ async def fetch_available_periods(
     url = f"{PERIODS_URL}?country={code}&periods_tab=1"
     headers = {
         "X-Requested-With": "XMLHttpRequest",
-        "User-Agent": "Mozilla/5.0 (compatible; FIDE-Scraper/1.0)",
+        "User-Agent": USER_AGENT,
     }
 
     try:

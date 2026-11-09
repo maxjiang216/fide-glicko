@@ -33,6 +33,12 @@ logger = logging.getLogger(__name__)
 
 FetchResult = Tuple[Optional[Any], Optional[str], int, Optional[bytes]]
 
+# Identify ourselves honestly so FIDE can see who we are and get in touch.
+USER_AGENT = (
+    "fide-glicko/1.0 (chess rating research; "
+    "+https://github.com/maxjiang216/fide-glicko)"
+)
+
 # Connection never established: the firewall is dropping or refusing us.
 _BLOCK_RE = re.compile(
     r"connect ?timeout|connecttimeout|errno 111|connection refused"

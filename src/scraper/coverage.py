@@ -181,6 +181,19 @@ def concat_unified(tables: list[pa.Table]) -> pa.Table:
         )
 
 
+def first_row_per_tournament(table: pa.Table, col: str = "tournament_id") -> pa.Table:
+    """Keep the first row for each tournament (details have one row each; old
+    retry passes could leave duplicates in a single chunk file)."""
+    if table.num_rows == 0 or col not in table.column_names:
+        return table
+    seen: set = set()
+    keep = []
+    for i, v in enumerate(pc.cast(table.column(col), pa.string()).to_pylist()):
+        keep.append(v not in seen)
+        seen.add(v)
+    return table.filter(pa.array(keep))
+
+
 def merge_newest_first(
     tables_newest_first: list[pa.Table], col: str = "tournament_id"
 ) -> pa.Table:
@@ -395,8 +408,13 @@ def load_details(
     """Successful details rows for the month, newest file wins per tournament."""
     list_objects, read_bytes = _default_io(list_objects, read_bytes)
     files = list_month_files(bucket, base, list_objects)
-    return merge_newest_first(
-        [successful_details(t) for t in _read_tables(read_bytes, bucket, files.details)]
+    return first_row_per_tournament(
+        merge_newest_first(
+            [
+                successful_details(t)
+                for t in _read_tables(read_bytes, bucket, files.details)
+            ]
+        )
     )
 
 
@@ -416,8 +434,13 @@ def load_month(
     expected = read_expected_ids(bucket, base, read_bytes)
     files = list_month_files(bucket, base, list_objects)
 
-    details = merge_newest_first(
-        [successful_details(t) for t in _read_tables(read_bytes, bucket, files.details)]
+    details = first_row_per_tournament(
+        merge_newest_first(
+            [
+                successful_details(t)
+                for t in _read_tables(read_bytes, bucket, files.details)
+            ]
+        )
     )
     players = merge_newest_first(_read_tables(read_bytes, bucket, files.players))
     games = merge_newest_first(_read_tables(read_bytes, bucket, files.games))

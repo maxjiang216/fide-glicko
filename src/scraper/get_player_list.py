@@ -269,7 +269,11 @@ def download_player_list(
     sess = session or requests.Session()
     for attempt in range(max_retries):
         try:
-            resp = sess.get(DOWNLOAD_URL, timeout=120)
+            from fide_http import USER_AGENT
+
+            resp = sess.get(
+                DOWNLOAD_URL, timeout=120, headers={"User-Agent": USER_AGENT}
+            )
             resp.raise_for_status()
             return resp.content
         except requests.RequestException as e:

@@ -13,6 +13,7 @@ import json
 import logging
 import os
 import random
+import re
 import signal
 import sys
 import tempfile
@@ -26,7 +27,7 @@ import pandas as pd
 import pyarrow.parquet as pq
 import requests
 
-from fide_http import AdaptiveRateLimiter, PoliteFetcher
+from fide_http import USER_AGENT, AdaptiveRateLimiter, PoliteFetcher
 from bs4 import BeautifulSoup
 from tqdm import tqdm
 
@@ -182,23 +183,22 @@ def extract_link_href(cell) -> str:
     return ""
 
 
-def parse_time_control(raw: str) -> tuple[str, bool]:
+def parse_time_control(raw: str) -> tuple[Optional[str], bool]:
     """
     Parse time_control to S (standard), R (rapid), or B (blitz).
-    First word (case-insensitive): blitz->B, rapid->R, standard->S.
-    Otherwise default to S and return (S, True) to indicate it was defaulted.
+
+    FIDE writes e.g. "Standard: 60' + 30''", "Rapid: 15-15 min/all",
+    "Blitz: 5 min". The first word decides (case-insensitive, punctuation
+    ignored). Empty or unrecognised values return (None, True): they must not
+    be counted as standard, since only S games feed the Glicko ratings.
     Returns (code, was_defaulted).
     """
-    if not raw or not str(raw).strip():
-        return "S", False
-    first = str(raw).strip().split()[0].lower() if str(raw).strip().split() else ""
-    if first == "blitz":
-        return "B", False
-    if first == "rapid":
-        return "R", False
-    if first == "standard":
-        return "S", False
-    return "S", True
+    words = re.findall(r"[a-z]+", str(raw or "").lower())
+    first = words[0] if words else ""
+    code = {"standard": "S", "rapid": "R", "blitz": "B"}.get(first)
+    if code is None:
+        return None, True
+    return code, False
 
 
 def parse_n_players(raw: str) -> tuple[Optional[int], bool]:
@@ -271,7 +271,7 @@ def fetch_tournament_details(
 
         try:
             headers = {
-                "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                "User-Agent": USER_AGENT,
                 "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
                 "Accept-Language": "en-US,en;q=0.9",
                 "Cache-Control": "max-age=0",
@@ -683,7 +683,7 @@ def save_failures_json(results: List[Dict], base_path: str) -> None:
     ]
     if not failures:
         return
-    path = base_path.rstrip(".parquet") + "_failures.json"
+    path = base_path.removesuffix(".parquet") + "_failures.json"
     content = json.dumps(failures, indent=2, ensure_ascii=False)
     _write_to_path(path, content)
     logger.info(f"Saved {len(failures)} failures to {path}")

@@ -42,7 +42,10 @@ def fetch_federation(
     from get_tournaments import TOURNAMENTS_URL
 
     url = f"{TOURNAMENTS_URL}?country={code}&period={year}-{month:02d}-01"
+    from fide_http import USER_AGENT
+
     headers = {
+        "User-Agent": USER_AGENT,
         "X-Requested-With": "XMLHttpRequest",
         "Accept": "application/json, text/javascript, */*; q=0.01",
     }

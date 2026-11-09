@@ -28,7 +28,7 @@ from typing import Dict, List, Optional, Tuple
 import pandas as pd
 import requests
 
-from fide_http import AdaptiveRateLimiter, PoliteFetcher
+from fide_http import USER_AGENT, AdaptiveRateLimiter, PoliteFetcher
 from bs4 import BeautifulSoup
 from tqdm import tqdm
 
@@ -470,7 +470,7 @@ def fetch_tournament_report(
 
         try:
             headers = {
-                "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                "User-Agent": USER_AGENT,
                 "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
                 "Accept-Language": "en-US,en;q=0.9",
                 "Connection": "close",

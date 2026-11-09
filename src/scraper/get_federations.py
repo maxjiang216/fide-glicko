@@ -17,6 +17,8 @@ from pathlib import Path
 from typing import List, Dict, Optional
 
 import requests
+
+from fide_http import USER_AGENT
 from bs4 import BeautifulSoup
 
 from s3_io import (
@@ -69,7 +71,7 @@ def get_federations_with_retries(
     """
     for attempt in range(max_retries):
         try:
-            response = requests.get(URL, timeout=55)
+            response = requests.get(URL, timeout=55, headers={"User-Agent": USER_AGENT})
             response.raise_for_status()
 
             soup = BeautifulSoup(response.text, "html.parser")
