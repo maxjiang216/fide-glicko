@@ -179,3 +179,18 @@ def test_page_structure_error_returned_without_retry():
     fetch, calls = _script("no data found")
     data, err, _, _ = _fetcher(clock, _limiter(clock)).fetch("details 1", fetch)
     assert err == "no data found" and len(calls) == 1
+
+
+def test_fetcher_stats_count_signals():
+    clock = FakeClock()
+    lim = _limiter(clock, rate=0.4)
+    f = _fetcher(clock, lim)
+    fetch, _ = _script("HTTP 502", None)
+    f.fetch("a", fetch)
+    fetch, _ = _script(CONNECT_TIMEOUT, None)
+    f.fetch("b", fetch)
+    st = f.stats()
+    assert st["requests"] == 4
+    assert st["strain_errors"] == 1 and st["block_signals"] == 1
+    assert st["slowdowns"] == 1 and st["final_rate"] == pytest.approx(0.2)
+    assert st["latency_p50_s"] is not None

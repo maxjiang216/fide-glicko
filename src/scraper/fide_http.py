@@ -26,7 +26,7 @@ import logging
 import re
 import statistics
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Callable, Optional, Tuple
 
 logger = logging.getLogger(__name__)
@@ -168,12 +168,34 @@ class PoliteFetcher:
     strain_retries: int = 3
     sleep: Callable[[float], None] = time.sleep
     clock: Callable[[], float] = time.monotonic
+    # Counters for monitoring (see metrics.py)
+    block_signals: int = 0
+    strain_errors: int = 0
+    latencies: list = field(default_factory=list)
 
     def _once(self, fetch: Callable[..., FetchResult]) -> tuple[FetchResult, float]:
         self.limiter.wait()
         t0 = self.clock()
         result = fetch(max_attempts=1)
-        return result, self.clock() - t0
+        latency = self.clock() - t0
+        self.latencies.append(latency)
+        return result, latency
+
+    def stats(self) -> dict:
+        lat = sorted(self.latencies)
+        p = lambda q: (
+            lat[min(len(lat) - 1, int(q * len(lat)))] if lat else None
+        )  # noqa: E731
+        return {
+            "requests": self.limiter.requests,
+            "block_signals": self.block_signals,
+            "strain_errors": self.strain_errors,
+            "slowdowns": self.limiter.slowdowns,
+            "target_rate": self.limiter.target_rate,
+            "final_rate": self.limiter.rate,
+            "latency_p50_s": p(0.5),
+            "latency_p90_s": p(0.9),
+        }
 
     def fetch(self, label: str, fetch: Callable[..., FetchResult]) -> FetchResult:
         """
@@ -191,6 +213,7 @@ class PoliteFetcher:
                 self.limiter.record_ok(latency)
                 return result
             if is_block_error(error):
+                self.block_signals += 1
                 if block_retried:
                     raise FideBlocked(
                         f"FIDE blocking this IP ({label}: {error}); stopping so the "
@@ -206,6 +229,7 @@ class PoliteFetcher:
                 self.sleep(self.block_retry_wait_s)
                 continue
             # Strain
+            self.strain_errors += 1
             self.limiter.slow_down(f"{label}: {error}")
             if strain_left <= 0:
                 return result

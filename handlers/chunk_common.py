@@ -76,7 +76,7 @@ def run_chunk_lambda(kind: str, event: dict, context) -> dict:
         run_chunk,
     )
     from coverage import done_ids, load_details
-    from fide_http import AdaptiveRateLimiter, PoliteFetcher
+    from fide_http import AdaptiveRateLimiter, FideBlocked, PoliteFetcher
     from get_tournament_details import _read_ids_from_path
 
     validate_event(event)
@@ -126,14 +126,37 @@ def run_chunk_lambda(kind: str, event: dict, context) -> dict:
         raise ValueError(f"kind must be details or reports (got {kind!r})")
 
     logger.info("Starting %s chunk %d/%d of %s at %.2f req/s", kind, i, n, base, rate)
-    result = run_chunk(ids, done, process, flush, deadline=deadline)
+    from metrics import chunk_summary, emit
+
+    def summarize(chunk_result, blocked, error=None):
+        # One EMF line per invocation: Logs Insights row + CloudWatch metrics.
+        emit(
+            chunk_summary(
+                kind=kind,
+                run_name=run_name,
+                chunk=f"{i}_of_{n}",
+                fetch_stats=fetcher.stats(),
+                chunk_result=chunk_result,
+                blocked=blocked,
+                error=error,
+            )
+        )
+
+    try:
+        result = run_chunk(ids, done, process, flush, deadline=deadline)
+    except FideBlocked as e:
+        summarize(None, True, str(e))
+        raise
+    except Exception as e:
+        summarize(None, False, f"{type(e).__name__}: {e}")
+        raise
+    summarize(result.to_dict(), False)
     return {
         "statusCode": 200,
         "success": True,
         "kind": kind,
         "ids_uri": ids_uri,
         "rate_limit": rate,
-        "final_rate": fetcher.limiter.rate,
-        "slowdowns": fetcher.limiter.slowdowns,
+        "fetch_stats": fetcher.stats(),
         **result.to_dict(),
     }

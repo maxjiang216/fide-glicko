@@ -306,6 +306,85 @@ Resources:
         - Id: alerts-topic
           Arn: !Ref PipelineAlertsTopic
 
+  # Live view of a scrape: progress, request rate and FIDE health.
+  # Metrics come from the chunk_summary EMF lines (src/scraper/metrics.py).
+  ScrapeDashboard:
+    Type: AWS::CloudWatch::Dashboard
+    Properties:
+      DashboardName: fide-glicko-scrape
+      DashboardBody: !Sub |
+        {
+          "widgets": [
+            {
+              "type": "metric", "x": 0, "y": 0, "width": 12, "height": 6,
+              "properties": {
+                "title": "Throughput (per hour)",
+                "region": "${AWS::Region}", "view": "timeSeries", "stat": "Sum", "period": 3600,
+                "metrics": [
+                  ["FideGlicko", "requests", {"label": "FIDE requests"}],
+                  ["FideGlicko", "progress", {"label": "tournaments saved"}]
+                ]
+              }
+            },
+            {
+              "type": "metric", "x": 12, "y": 0, "width": 12, "height": 6,
+              "properties": {
+                "title": "FIDE health (per hour) - any block is worth a look",
+                "region": "${AWS::Region}", "view": "timeSeries", "stat": "Sum", "period": 3600,
+                "metrics": [
+                  ["FideGlicko", "blocked", {"label": "invocations stopped by block", "color": "#d62728"}],
+                  ["FideGlicko", "block_signals", {"label": "block signals"}],
+                  ["FideGlicko", "strain_errors", {"label": "strain errors (5xx, read timeouts)"}],
+                  ["FideGlicko", "slowdowns", {"label": "automatic slowdowns"}]
+                ]
+              }
+            },
+            {
+              "type": "metric", "x": 0, "y": 6, "width": 8, "height": 6,
+              "properties": {
+                "title": "Request rate at end of invocation (req/s)",
+                "region": "${AWS::Region}", "view": "timeSeries", "period": 900,
+                "metrics": [
+                  ["FideGlicko", "final_rate", {"stat": "Minimum", "label": "min"}],
+                  ["FideGlicko", "final_rate", {"stat": "Average", "label": "avg"}]
+                ],
+                "yAxis": {"left": {"min": 0}}
+              }
+            },
+            {
+              "type": "metric", "x": 8, "y": 6, "width": 8, "height": 6,
+              "properties": {
+                "title": "FIDE response time, median per invocation (s)",
+                "region": "${AWS::Region}", "view": "timeSeries", "period": 900,
+                "metrics": [
+                  ["FideGlicko", "latency_p50_s", {"stat": "Average", "label": "avg"}],
+                  ["FideGlicko", "latency_p50_s", {"stat": "Maximum", "label": "max"}]
+                ],
+                "yAxis": {"left": {"min": 0}}
+              }
+            },
+            {
+              "type": "metric", "x": 16, "y": 6, "width": 8, "height": 6,
+              "properties": {
+                "title": "Pipeline executions",
+                "region": "${AWS::Region}", "view": "timeSeries", "stat": "Sum", "period": 3600,
+                "metrics": [
+                  ["AWS/States", "ExecutionsSucceeded", "StateMachineArn", "${PipelineStateMachine}", {"color": "#2ca02c"}],
+                  ["AWS/States", "ExecutionsFailed", "StateMachineArn", "${PipelineStateMachine}", {"color": "#d62728"}]
+                ]
+              }
+            },
+            {
+              "type": "log", "x": 0, "y": 12, "width": 24, "height": 8,
+              "properties": {
+                "title": "Recent chunk invocations",
+                "region": "${AWS::Region}", "view": "table",
+                "query": "SOURCE '/aws/lambda/fide-glicko-details-chunk' | SOURCE '/aws/lambda/fide-glicko-reports-chunk' | filter event = 'chunk_summary' | fields @timestamp, run_name, kind, chunk, stopped, progress, remaining, failed, requests, final_rate, slowdowns, block_signals, latency_p50_s, error | sort @timestamp desc | limit 50"
+              }
+            }
+          ]
+        }
+
 Outputs:
   PipelineStateMachineArn:
     Description: Step Functions state machine ARN
@@ -316,3 +395,7 @@ Outputs:
   PipelineAlertsTopicArn:
     Description: SNS topic for pipeline failure alerts
     Value: !Ref PipelineAlertsTopic
+
+  ScrapeDashboardUrl:
+    Description: CloudWatch dashboard for scrape progress and FIDE health
+    Value: !Sub "https://${AWS::Region}.console.aws.amazon.com/cloudwatch/home?region=${AWS::Region}#dashboards:name=fide-glicko-scrape"

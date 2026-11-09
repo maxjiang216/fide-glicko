@@ -180,6 +180,16 @@
         "sns:UntagResource"
       ],
       "Resource": "arn:aws:sns:us-east-1:710271917035:fide-glicko-*"
+    },
+    {
+      "Sid": "CloudWatchDashboard",
+      "Effect": "Allow",
+      "Action": [
+        "cloudwatch:PutDashboard",
+        "cloudwatch:GetDashboard",
+        "cloudwatch:DeleteDashboards"
+      ],
+      "Resource": "arn:aws:cloudwatch::710271917035:dashboard/fide-glicko-*"
     }
   ]
 }
