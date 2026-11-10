@@ -65,11 +65,11 @@ aws stepfunctions start-execution \
 - **run_name** – For prod: omit (derived as `YYYY-MM`). For custom: required (e.g. `"backfill-2024-06"`). For test: optional (default `"test"`)
 - **bucket** – S3 bucket (default: fide-glicko)
 - **override** – if true, refetch/overwrite even when cached (default: false)
-- **max_concurrency** – Map state parallelism for chunk processing (default: 5)
-- **chunk_size** – optional; default 300
-- **tournaments_max_concurrency** – optional parallel federation requests in the tournaments step (default: 1)
-- **details_rate_limit** – requests per second to FIDE for details chunks (default: 0.33; `0` = unlimited)
-- **reports_rate_limit** – requests per second to FIDE for reports chunks (default: 0.33; `0` = unlimited)
+- **max_concurrency** – Map state parallelism for chunk processing (default: 1; higher means parallel bursts against FIDE)
+- **chunk_size** – optional; default 175
+- **details_rate_limit** – requests per second to FIDE for details chunks (default: 0.3; `0` = unlimited)
+- **reports_rate_limit** – requests per second to FIDE for reports chunks (default: 0.3; `0` = unlimited)
+- **tournaments_rate_limit** – requests per second to FIDE for the tournament list (default: 0.3)
 
 ### Semi-permanent defaults (SSM, no redeploy)
 
@@ -81,11 +81,11 @@ Example parameter value:
 
 ```json
 {
-  "chunk_size": 300,
-  "max_concurrency": 5,
-  "tournaments_max_concurrency": 2,
-  "details_rate_limit": 0.33,
-  "reports_rate_limit": 0.33
+  "chunk_size": 175,
+  "max_concurrency": 1,
+  "details_rate_limit": 0.3,
+  "reports_rate_limit": 0.3,
+  "tournaments_rate_limit": 0.3
 }
 ```
 

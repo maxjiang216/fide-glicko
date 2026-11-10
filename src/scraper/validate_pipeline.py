@@ -211,35 +211,53 @@ def validate_details_vs_reports(
     }
 
 
-def _collect_skipped_tournaments(bucket: str, base: str) -> dict:
-    """
-    Aggregate all *_skipped.json files written by reports_chunk into a summary.
-    Returns {"total": N, "by_error": {"no data found": [...], ...}}
-    """
-    import boto3
+# Written only by a validation that passed the coverage check (see run()).
+COMPLETE_MARKER = "coverage_complete.json"
 
-    s3 = boto3.client("s3")
-    prefix = f"{base}/reports/tournament_reports_chunks/"
+
+def _summarize_skipped(entries: list[dict]) -> dict:
+    """{"total": N, "by_error": {"no data found": [ids...], ...}}"""
     by_error: dict[str, list[str]] = {}
-    paginator = s3.get_paginator("list_objects_v2")
-    for page in paginator.paginate(Bucket=bucket, Prefix=prefix):
-        for obj in page.get("Contents", []):
-            key = obj["Key"]
-            if not key.endswith("_skipped.json"):
-                continue
-            try:
-                body = s3.get_object(Bucket=bucket, Key=key)["Body"].read()
-                entries = json.loads(body)
-                for entry in entries:
-                    err = entry.get("error", "unknown")
-                    by_error.setdefault(err, []).append(
-                        str(entry.get("tournament_code", "?"))
-                    )
-            except Exception:
-                pass
+    for entry in entries:
+        err = entry.get("error", "unknown")
+        by_error.setdefault(err, []).append(str(entry.get("tournament_code", "?")))
+    return {"total": sum(len(v) for v in by_error.values()), "by_error": by_error}
 
-    total = sum(len(v) for v in by_error.values())
-    return {"total": total, "by_error": by_error}
+
+def merged_coverage(
+    ids_text: str,
+    details_path: Path,
+    players_path: Path,
+    details_skipped: list[dict],
+    reports_skipped: list[dict],
+    details_gave_up: set = frozenset(),
+    reports_gave_up: set = frozenset(),
+):
+    """Coverage of tournament_ids.txt by the merged parquet files."""
+    import pyarrow.parquet as pq
+
+    from coverage import (
+        DETAILS_SKIPPABLE_ERRORS,
+        compute_coverage,
+        parse_ids,
+        skippable_ids,
+        successful_details,
+        tournament_ids,
+    )
+
+    details_done = tournament_ids(successful_details(pq.read_table(details_path)))
+    reports_done = tournament_ids(
+        pq.read_table(players_path, columns=["tournament_id"])
+    )
+    return compute_coverage(
+        parse_ids(ids_text),
+        details_done,
+        reports_done,
+        skippable_ids(reports_skipped),
+        skippable_ids(details_skipped, DETAILS_SKIPPABLE_ERRORS),
+        details_gave_up,
+        reports_gave_up,
+    )
 
 
 def run(
@@ -307,10 +325,40 @@ def run(
         details_path = download_to_file(details_uri, tmp_path / "details.parquet")
         reports_path = download_to_file(reports_uri, tmp_path / "reports.parquet")
 
+        rp_path = download_to_file(
+            build_s3_uri_for_run(
+                bucket, run_type, run_name, "data", "tournament_reports_players.parquet"
+            ),
+            tmp_path / "reports_players.parquet",
+        )
+        ids_path = download_to_file(
+            build_s3_uri_for_run(
+                bucket, run_type, run_name, "data", "tournament_ids.txt"
+            ),
+            tmp_path / "tournament_ids.txt",
+        )
+        from coverage import load_gave_up, load_skipped
+
+        details_skipped, reports_skipped = load_skipped(bucket, base)
+        details_gave_up, reports_gave_up = load_gave_up(bucket, base)
+        skipped = _summarize_skipped(reports_skipped)
+        skipped["details"] = _summarize_skipped(details_skipped)
+
+        # "Done" means complete: never write validation_report.json for a month
+        # whose merged files are missing tournaments.
+        cov = merged_coverage(
+            ids_path.read_text(),
+            details_path,
+            rp_path,
+            details_skipped,
+            reports_skipped,
+            details_gave_up,
+            reports_gave_up,
+        )
+        cov.raise_if_incomplete(f"Validation of {base}")
+
         pl_result = validate_player_list_vs_reports(players_path, reports_path)
         dt_result = validate_details_vs_reports(details_path, reports_path)
-
-    skipped = _collect_skipped_tournaments(bucket, base)
 
     has_issues = False
     if "error" in pl_result:
@@ -329,6 +377,7 @@ def run(
         "run_type": run_type,
         "run_name": run_name or "",
         "has_issues": has_issues,
+        "coverage": cov.summary(),
         "skipped_tournaments": skipped,
         "player_list_vs_reports": pl_result,
         "details_vs_reports": dt_result,
@@ -336,6 +385,17 @@ def run(
 
     report_uri = f"s3://{bucket}/{base}/reports/validation_report.json"
     write_output(json.dumps(report_dict, indent=2, default=str), report_uri)
+
+    # Completion marker the orchestrator keys on. Only reached when coverage is
+    # complete (raise_if_incomplete above). Old runs wrote validation_report.json
+    # for incomplete months, so that file alone does not mean "done".
+    marker_uri = f"s3://{bucket}/{base}/reports/{COMPLETE_MARKER}"
+    write_output(
+        json.dumps(
+            {"schema": 2, "coverage": cov.summary(sample=0), "report": report_uri}
+        ),
+        marker_uri,
+    )
 
     logger.info(
         "Validation report written to %s (has_issues=%s)", report_uri, has_issues

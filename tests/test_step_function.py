@@ -88,3 +88,26 @@ def test_no_execution_input_refs_to_defaulted_fields() -> None:
                 "(defaulted by AddDefaultRunName). Use Map.Item.Value or another source."
             )
     assert not violations, "\n".join(violations)
+
+
+def test_chunk_failures_are_not_swallowed() -> None:
+    """A failed chunk must fail the Map (and the run), never end in a Pass state."""
+    definition = _load_pipeline()
+    map_state = definition["States"]["MapDetailsAndReports"]
+    inner = map_state["Iterator"]["States"]
+    assert not [n for n, s in inner.items() if s.get("Type") == "Pass"]
+    for name, state in inner.items():
+        for catch in state.get("Catch", []):
+            assert inner[catch["Next"]]["Type"] != "Pass", name
+    # Map-level retry of States.ALL re-runs every chunk in a burst
+    for retry in map_state.get("Retry", []):
+        assert "States.ALL" not in retry["ErrorEquals"]
+
+
+def test_no_execution_input_refs_at_all() -> None:
+    """EnsureRunName fills defaults (bucket, override, rates, ...) into the state;
+    $$.Execution.Input only has what the caller sent, so any reference to it
+    breaks executions started with a minimal input (found by the local
+    end-to-end run: $$.Execution.Input.override in the Map ItemSelector)."""
+    refs = _find_execution_input_refs(_load_pipeline())
+    assert not refs, f"Use state input ($.field) instead of $$.Execution.Input: {refs}"

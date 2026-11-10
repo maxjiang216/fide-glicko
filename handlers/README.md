@@ -41,16 +41,16 @@ All Lambdas accept **run_type**, **run_name**, **bucket**, **override** where ap
   "run_name": "2025-03",
   "bucket": "fide-glicko",
   "override": false,
-  "tournaments_max_concurrency": null
+  "tournaments_rate_limit": 0.3
 }
 ```
 - **year**, **month**: Required
 - **run_type**, **run_name**: run_name comes from EnsureRunName (prod: YYYY-MM; custom: user-provided)
 - **federations_s3_uri**: Optional. Defaults to latest in `{bucket}/federations/data/`
-- **tournaments_max_concurrency**: Optional. Parallel federation HTTP requests (default `1` when omitted/null). Increase (e.g. `3`–`5`) if the step fails with **Sandbox.Timedout** at **900s** (Lambda hard limit). Lower values reduce burst load on FIDE from AWS.
+- **tournaments_rate_limit**: Optional. Requests per second to FIDE (default `0.3`). One federation at a time.
 - Outputs: `{base}/data/tournament_ids.txt`, `{base}/sample/tournament_ids_sample.json`, `{base}/raw/tournaments.json.gz` (raw API JSON, all federations concatenated, gzip-9)
 
-**Tournaments step & 900s timeout:** One Lambda invocation must finish all federations (~200). Standard Lambdas cannot run longer than **900 seconds**. CloudWatch logs include `projected_total_s`, `lambda_remaining_ms`, and warnings when the scrape is on track to exceed the limit. Mitigations: raise **tournaments_max_concurrency** (faster wall clock, more FIDE load), or split work across multiple runs (e.g. custom federation subsets — not built in). For very slow FIDE responses, **merge** / **ECS** would be a larger architectural change.
+**Tournaments step & 900s timeout:** resumable. Each federation's response is saved to `{base}/data/tournament_list_parts/{FED}.json`; the call stops ~150s before the Lambda limit and returns `remaining`, and the state machine calls it again. `tournament_ids.txt` is written only when every federation is saved (an older differing list is kept as `tournament_ids_prev_<stamp>.txt`), then the parts are deleted.
 
 ### split_ids
 ```json

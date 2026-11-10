@@ -87,8 +87,21 @@ jobs:
         if: github.event_name == 'push' || github.event_name == 'pull_request' || github.event.inputs.deploy == 'true'
         run: bash scripts/ensure_ecr_repos.sh
 
+      # ZIP functions with requirements.txt (federations, tournaments) are
+      # built by pip for the Lambda runtime, so sam build needs python3.12
+      # first on PATH. The rest of the job keeps 3.13 (pyproject).
+      - name: Set up Python 3.12 for SAM build
+        id: py312
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          update-environment: false
+
       - name: SAM build
-        run: sam build --cached
+        run: |
+          export PATH="$(dirname "${{ steps.py312.outputs.python-path }}"):$PATH"
+          python --version
+          sam build --cached
 
       - name: SAM validate
         run: sam validate --region ${{ vars.AWS_REGION || 'us-east-1' }}

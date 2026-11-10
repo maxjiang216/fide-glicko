@@ -51,3 +51,38 @@ class TestGetFederations:
             assert required_keys <= set(f.keys()), f"Missing keys: {f}"
             assert f["code"], f"Empty code: {f}"
             assert f["name"], f"Empty name: {f}"
+
+
+def test_failed_refresh_falls_back_to_previous_list(tmp_path, monkeypatch):
+    import os
+    import time
+
+    import get_federations as gf
+
+    prev = tmp_path / gf.FEDERATIONS_DATA_PREFIX / "federations_20200101-000000.csv"
+    prev.parent.mkdir(parents=True)
+    prev.write_text("code,name\nISL,Iceland\n")
+    old = time.time() - 60 * 86400  # stale, so a refresh is attempted
+    os.utime(prev, (old, old))
+
+    def boom(*a, **k):
+        raise ConnectionError(
+            "Connection to ratings.fide.com timed out. (connect timeout=55)"
+        )
+
+    monkeypatch.setattr(gf, "get_federations_with_retries", boom)
+    assert gf.run_shared(bucket=None, local_root=str(tmp_path)) == str(prev)
+
+
+def test_failed_refresh_without_previous_list_raises_block(tmp_path, monkeypatch):
+    import get_federations as gf
+    from fide_http import FideBlocked
+
+    def boom(*a, **k):
+        raise ConnectionError(
+            "Connection to ratings.fide.com timed out. (connect timeout=55)"
+        )
+
+    monkeypatch.setattr(gf, "get_federations_with_retries", boom)
+    with pytest.raises(FideBlocked):
+        gf.run_shared(bucket=None, local_root=str(tmp_path))

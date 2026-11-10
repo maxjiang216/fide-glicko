@@ -32,6 +32,11 @@ bash scripts/prepare_functions.sh
 # Build SAM stack
 sam build --cached
 
+# End-to-end local test before deploying: real Lambdas (sam local) + Step Functions
+# Local, small custom run (3-federation CSV), validates the real ASL with AWS first
+uv run scripts/local_pipeline_test.py --year 2015 --month 6 --run-name localtest-2015-06 \
+    --federations-s3-uri s3://fide-glicko/custom/localtest-feds/federations.csv
+
 # Deploy (local, requires AWS CLI configured)
 sam deploy
 ```
@@ -86,7 +91,8 @@ s3://fide-glicko/
 ### Key behaviors and constraints
 
 - **CGO fallback**: Republic of Congo is hard-coded into `get_federations.py` because FIDE's country selector omits it. The `test_cgo_in_federations` online test verifies it's present.
-- **Rate limits**: Details endpoint throttles above ~0.6 req/s (causes `RemoteDisconnected`). Default is 0.33 req/s. Reports endpoint tolerates higher rates. Tournaments Lambda has a 900s hard limit — raise `tournaments_max_concurrency` if it times out.
+- **Rate limits / FIDE blocking**: FIDE blocks per IP (dropped/refused connections, never 429). All requests go through `src/scraper/fide_http.py` (one rate limiter incl. retries, halves rate on strain, raises `FideBlocked` on block; Step Functions waits 30m→4h). Default 0.3 req/s per step, `max_concurrency` 1; tune via SSM. Never raise parallelism to go faster.
+- **Resumable steps**: Tournaments, DetailsChunk and ReportsChunk save progress as part files and stop before the 900s Lambda limit; the state machine loops them while `remaining > 0`. Merge and validate refuse incomplete months (`coverage.py`).
 - **Parquet list fields**: Arbiter and organizer columns are stored as semicolon-separated strings in Parquet (not arrays) for compatibility. Split with `df['col'].str.split(';')`.
 - **Lambda imports**: Scraper modules are placed at the Lambda function root so `from get_federations import ...` resolves without package paths.
 - **CI**: Offline tests run on every push/PR. Deploy triggers on push to main when relevant files change. PRs generate a SAM changeset preview (no deploy).

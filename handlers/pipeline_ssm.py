@@ -21,9 +21,9 @@ logger = logging.getLogger(__name__)
 PIPELINE_CONFIG_KEYS = (
     "chunk_size",
     "max_concurrency",
-    "tournaments_max_concurrency",
     "details_rate_limit",
     "reports_rate_limit",
+    "tournaments_rate_limit",
 )
 
 _ssm_client = None

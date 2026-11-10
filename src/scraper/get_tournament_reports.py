@@ -27,6 +27,8 @@ from typing import Dict, List, Optional, Tuple
 
 import pandas as pd
 import requests
+
+from fide_http import USER_AGENT, AdaptiveRateLimiter, PoliteFetcher
 from bs4 import BeautifulSoup
 from tqdm import tqdm
 
@@ -436,6 +438,7 @@ def fetch_tournament_report(
     *,
     _attempt_log: Optional[List[Dict]] = None,
     return_raw: bool = False,
+    max_attempts: int = 2,
 ) -> Tuple[Optional[Dict], Optional[str], int, Optional[bytes]]:
     """
     Fetch tournament report from FIDE website.
@@ -447,7 +450,7 @@ def fetch_tournament_report(
     """
     url = f"https://ratings.fide.com/tournament_src_report.phtml?code={tournament_code}"
 
-    max_retries = 2
+    max_retries = max_attempts
     # Fail fast on connect: 15s to establish, 45s to read (large report pages)
     connect_timeout, read_timeout = 15, 45
     last_error = None
@@ -467,7 +470,7 @@ def fetch_tournament_report(
 
         try:
             headers = {
-                "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                "User-Agent": USER_AGENT,
                 "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
                 "Accept-Language": "en-US,en;q=0.9",
                 "Connection": "close",
@@ -1288,6 +1291,21 @@ SKIPPABLE_ERRORS = frozenset(
 )
 
 
+def details_map_from_df(
+    df: pd.DataFrame,
+) -> Dict[str, Tuple[Optional[str], Optional[str]]]:
+    """{event_code: (start_iso, end_iso)} from a details DataFrame, for date inference."""
+    details_map: Dict[str, Tuple[Optional[str], Optional[str]]] = {}
+    ec_col = "event_code" if "event_code" in df.columns else "id"
+    for _, row in df.iterrows():
+        ec = row.get(ec_col)
+        if pd.notna(ec) and str(ec):
+            sd = parse_details_date_to_iso(str(row.get("start_date", "")))
+            ed = parse_details_date_to_iso(str(row.get("end_date", "")))
+            details_map[str(ec)] = (sd, ed)
+    return details_map
+
+
 def save_skipped_json(skipped: List[Dict], base_path: str) -> None:
     """Save tournaments skipped (no original report) to JSON for reporting."""
     if not skipped:
@@ -1299,13 +1317,10 @@ def save_skipped_json(skipped: List[Dict], base_path: str) -> None:
 
 
 def save_players_parquet(results: List[Dict], parquet_path: str):
-    """Save players Parquet. PK: (player_id, tournament_id)."""
-    try:
-        df = results_to_players_dataframe(results)
-        _write_parquet_to_path(df, parquet_path)
-        logger.info(f"Saved {len(df)} player rows to {parquet_path}")
-    except Exception as e:
-        logger.error(f"Players Parquet save failed: {e}")
+    """Save players Parquet. PK: (player_id, tournament_id). Raises on failure."""
+    df = results_to_players_dataframe(results)
+    _write_parquet_to_path(df, parquet_path)
+    logger.info(f"Saved {len(df)} player rows to {parquet_path}")
 
 
 def save_games_parquet(
@@ -1313,14 +1328,12 @@ def save_games_parquet(
     parquet_path: str,
     details_map: Optional[Dict[str, Tuple[Optional[str], Optional[str]]]] = None,
 ):
-    """Save games as Parquet file (one row per game, main output format)."""
-    try:
-        df = results_to_games_dataframe(results, details_map=details_map)
-        _write_parquet_to_path(df, parquet_path)
-        logger.info(f"Saved {len(results)} tournament(s) to {parquet_path}")
-        logger.info(f"  Total games: {len(df)}")
-    except Exception as e:
-        logger.error(f"Games Parquet save failed: {e}")
+    """Save games as Parquet file (one row per game, main output format).
+    Raises on failure."""
+    df = results_to_games_dataframe(results, details_map=details_map)
+    _write_parquet_to_path(df, parquet_path)
+    logger.info(f"Saved {len(results)} tournament(s) to {parquet_path}")
+    logger.info(f"  Total games: {len(df)}")
 
 
 def _transform_results_round_dates_to_datetime(
@@ -1492,13 +1505,7 @@ def run(
                 df = pd.read_parquet(local_path)
             else:
                 df = pd.read_parquet(details_path)
-            ec_col = "event_code" if "event_code" in df.columns else "id"
-            for _, row in df.iterrows():
-                ec = row.get(ec_col)
-                if pd.notna(ec) and str(ec):
-                    sd = parse_details_date_to_iso(str(row.get("start_date", "")))
-                    ed = parse_details_date_to_iso(str(row.get("end_date", "")))
-                    details_map[str(ec)] = (sd, ed)
+            details_map = details_map_from_df(df)
             logger.info(
                 "Loaded date bounds for %d tournaments from %s",
                 len(details_map),
@@ -1542,42 +1549,33 @@ def run(
             bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}]",
         )
 
-    rate_limiter = RateLimiter(rate_limit) if rate_limit > 0 else None
+    fetcher = PoliteFetcher(AdaptiveRateLimiter(rate_limit))
 
     start_time = time.time()
 
     for code in current_codes:
-        if rate_limiter:
-            rate_limiter.wait()
-        report, error, _, raw_content = fetch_tournament_report(
-            code, session, return_raw=save_raw
+        # Raises FideBlocked if FIDE is blocking us; strain is retried
+        # (slower) inside the fetcher.
+        report, error, _, raw_content = fetcher.fetch(
+            f"report {code}",
+            lambda **kw: fetch_tournament_report(
+                code, session, return_raw=save_raw, **kw
+            ),
         )
 
         result = {"tournament_code": code}
         if report is None:
-            error_str = error or ""
-            is_timeout_exhausted = (
-                "max retries exceeded" in error_str and "timeout" in error_str
-            )
-            if error in SKIPPABLE_ERRORS or is_timeout_exhausted:
-                # No usable report data — skip and record for audit.
-                # Timeout-exhausted: tournament has been permanently unreachable
-                # across all retries; skip rather than block the whole chunk.
-                if is_timeout_exhausted:
-                    logger.warning(
-                        "Skipping tournament %s after exhausting retries with timeout: %s",
-                        code,
-                        error_str[:200],
-                    )
+            if error in SKIPPABLE_ERRORS:
+                # No usable report data — skip and record for audit
                 result["success"] = False
-                result["error"] = error_str
-                skipped_reports.append({"tournament_code": code, "error": error_str})
+                result["error"] = error
+                skipped_reports.append({"tournament_code": code, "error": error})
                 all_results.append(result)
                 if pbar:
                     pbar.update(1)
                 continue
             raise RuntimeError(
-                f"Report fetch failed for tournament {code}: {error_str or 'unknown'}; "
+                f"Report fetch failed for tournament {code}: {error or 'unknown'}; "
                 "aborting chunk so Step Function can retry with fresh Lambda"
             ) from None
 

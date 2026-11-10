@@ -17,6 +17,8 @@ from pathlib import Path
 from typing import List, Dict, Optional
 
 import requests
+
+from fide_http import USER_AGENT
 from bs4 import BeautifulSoup
 
 from s3_io import (
@@ -69,7 +71,7 @@ def get_federations_with_retries(
     """
     for attempt in range(max_retries):
         try:
-            response = requests.get(URL, timeout=55)
+            response = requests.get(URL, timeout=55, headers={"User-Agent": USER_AGENT})
             response.raise_for_status()
 
             soup = BeautifulSoup(response.text, "html.parser")
@@ -206,7 +208,24 @@ def run_shared(
     try:
         federations = get_federations_with_retries()
     except Exception as e:
+        # The federation list barely changes; a failed refresh must not fail
+        # the month when an older list exists. Use it and say so.
+        if use_s3:
+            previous, _ = get_latest_in_s3_prefix(bucket, FEDERATIONS_DATA_PREFIX + "/")
+        else:
+            previous, _ = get_latest_in_local_prefix(
+                local_root or "data", FEDERATIONS_DATA_PREFIX
+            )
+        if previous:
+            logger.warning(
+                "Federations refresh failed (%s); using previous list %s", e, previous
+            )
+            return str(previous)
+        from fide_http import FideBlocked, is_block_error
+
         logger.error("Error fetching federations: %s", e)
+        if is_block_error(str(e)):
+            raise FideBlocked(f"Failed to fetch federations: {e}") from e
         raise RuntimeError(f"Failed to fetch federations: {e}") from e
 
     if not federations:

@@ -35,15 +35,9 @@ def lambda_handler(event: dict, context) -> dict:
         override,
     )
 
-    try:
-        federations_uri = run_shared(bucket=bucket, override=override, quiet=False)
-    except RuntimeError as e:
-        logger.error("Federations scrape failed: %s", e)
-        return {
-            "statusCode": 500,
-            "success": False,
-            "error": str(e),
-        }
+    # Raises on failure so Step Functions sees it (a success:false return was
+    # treated as success).
+    federations_uri = run_shared(bucket=bucket, override=override, quiet=False)
 
     logger.info("Federations scrape completed successfully: %s", federations_uri)
     return {

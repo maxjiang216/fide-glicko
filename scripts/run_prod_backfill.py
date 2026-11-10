@@ -82,7 +82,13 @@ def fetch_available_periods() -> list[tuple[int, int]]:
     Returns empty list on failure (caller falls back to unfiltered range).
     """
     url = f"{PERIODS_URL}?country={REFERENCE_FED}&periods_tab=1"
-    headers = {"X-Requested-With": "XMLHttpRequest"}
+    import sys
+    from pathlib import Path
+
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src" / "scraper"))
+    from fide_http import USER_AGENT
+
+    headers = {"X-Requested-With": "XMLHttpRequest", "User-Agent": USER_AGENT}
     try:
         resp = requests.get(url, headers=headers, timeout=15)
         if resp.status_code != 200:
@@ -151,7 +157,15 @@ def main() -> int:
         "-c",
         type=int,
         default=1,
-        help="Max concurrent Step Function executions (default: 1)",
+        help="Max concurrent Step Function executions (default: 1). Above 1 "
+        "needs --allow-parallel: each execution has its own rate limiter, so FIDE "
+        "sees the rates added together",
+    )
+    parser.add_argument(
+        "--allow-parallel",
+        action="store_true",
+        help="Permit --concurrency/--max-concurrency above 1 and starting while "
+        "another execution is running",
     )
     parser.add_argument(
         "--state-machine-arn",
@@ -175,16 +189,16 @@ def main() -> int:
     parser.add_argument(
         "--max-concurrency",
         type=int,
-        default=5,
-        help="Map state concurrency per execution (default: 5)",
+        default=None,
+        help="Map state concurrency per execution (default: omit = SSM/code default 1). "
+        "Above 1 brings back parallel bursts against FIDE",
     )
     parser.add_argument(
-        "--tournaments-max-concurrency",
-        type=int,
+        "--tournaments-rate-limit",
+        type=float,
         default=None,
-        metavar="N",
-        help="Tournaments Lambda: parallel federation requests (default: omit = 1). "
-        "Raise if tournaments step hits 900s Sandbox.Timedout",
+        metavar="REQ_S",
+        help="Tournaments step request rate (default: omit = SSM/code default 0.3)",
     )
     parser.add_argument(
         "--chunk-size",
@@ -215,6 +229,15 @@ def main() -> int:
 
     if args.concurrency < 1:
         logger.error("--concurrency must be >= 1")
+        return 1
+    if not args.allow_parallel and (
+        args.concurrency > 1
+        or (args.max_concurrency is not None and args.max_concurrency != 1)
+    ):
+        logger.error(
+            "Parallel scraping needs --allow-parallel (FIDE blocks per IP; one "
+            "worker at a time is the default)"
+        )
         return 1
 
     try:
@@ -284,6 +307,18 @@ def main() -> int:
         )
         return 1
 
+    already = client.list_executions(
+        stateMachineArn=arn, statusFilter="RUNNING", maxResults=10
+    ).get("executions", [])
+    if already and not args.allow_parallel:
+        logger.error(
+            "%d execution(s) already running (e.g. %s, maybe the orchestrator). "
+            "Wait for them or pass --allow-parallel",
+            len(already),
+            already[0]["name"],
+        )
+        return 1
+
     pending: list[tuple[int, int]] = list(months)
     running: dict[str, RunState] = {}
     completed: list[tuple[int, int, str, str]] = []  # (y, m, status, execution_arn)
@@ -301,12 +336,13 @@ def main() -> int:
             "run_type": "prod",
             "bucket": args.bucket,
             "override": args.override,
-            "max_concurrency": args.max_concurrency,
         }
+        if args.max_concurrency is not None:
+            input_dict["max_concurrency"] = args.max_concurrency
         if args.chunk_size is not None:
             input_dict["chunk_size"] = args.chunk_size
-        if args.tournaments_max_concurrency is not None:
-            input_dict["tournaments_max_concurrency"] = args.tournaments_max_concurrency
+        if args.tournaments_rate_limit is not None:
+            input_dict["tournaments_rate_limit"] = args.tournaments_rate_limit
         if args.details_rate_limit is not None:
             input_dict["details_rate_limit"] = args.details_rate_limit
         if args.reports_rate_limit is not None:

@@ -1,45 +1,53 @@
 """
-Lambda handler for tournaments scraper.
+Lambda handler for the tournaments step: fetch the month's tournament list,
+one federation at a time, resumably (see src/scraper/tournament_list.py).
 
 Event shape:
 {
     "year": 2025,
     "month": 3,
-    "run_type": "custom",
-    "run_name": "2024-01",
+    "run_type": "prod",
+    "run_name": "2025-03",
     "bucket": "fide-glicko",
     "override": false,
-    "federations_s3_uri": "s3://fide-glicko/prod/2024-01/data/federations.csv"
+    "federations_s3_uri": null,
+    "tournaments_rate_limit": 0.3
 }
 
-- year, month: Required
-- run_type: prod, custom, or test (default: custom)
-- run_name: Required for prod/custom. Ignored for test.
-- bucket: S3 bucket (default: fide-glicko)
-- override: If true, overwrite existing output
-- federations_s3_uri: Optional. Defaults to {base}/data/federations.csv
-- tournaments_max_concurrency: Optional int (default 1). Parallel federation requests to FIDE.
-  Increase if Sandbox.Timedout at 900s; lower reduces throttling risk.
+- override: refetch even if tournament_ids.txt exists.
+- federations_s3_uri: defaults to the latest federations list in S3.
 
-Outputs: {base}/data/tournament_ids.txt, {base}/sample/tournament_ids_sample.json,
-{base}/raw/tournaments.json.gz (raw API JSON, all federations concatenated, gzip-9)
+Returns {"remaining": N, "progress": K, "finalized": bool, ...}. The Step
+Function calls it again while remaining > 0 and progress > 0. Raises
+FideBlocked on a block (saved federations are kept) and ValueError on a bad
+event. tournament_ids.txt is only ever written complete.
 """
 
 import json
 import logging
+import tempfile
+from pathlib import Path
 
 import boto3
 from botocore.exceptions import ClientError
 
+from .chunk_common import (
+    deadline_from_context,
+    hard_deadline_from_context,
+    rate_limit_req_s,
+)
 from .lambda_logging import configure
 from s3_io import (
     build_run_base,
     build_s3_uri_for_run,
+    download_to_file,
+    list_s3_objects,
     output_exists,
+    parse_s3_uri,
     resolve_latest_federations_uri,
+    write_output,
     write_run_metadata,
 )
-from get_tournaments import run
 
 COUNTRY_MONTHS_KEY = "metadata/country_months.json"
 
@@ -48,9 +56,9 @@ logger = logging.getLogger(__name__)
 
 def _load_federation_filter(bucket: str, year: int, month: int) -> frozenset | None:
     """
-    Load country-months lookup from S3 and return the set of federation codes
-    that have tournament data for the given year/month. Returns None if the
-    lookup file doesn't exist or fails to load (falls back to querying all feds).
+    Federation codes with tournament data for year/month, from the
+    country-months lookup in S3. None (query all federations) if the lookup is
+    missing, unreadable or has no entry for the month.
     """
     year_month = f"{year}-{month:02d}"
     try:
@@ -63,12 +71,12 @@ def _load_federation_filter(bucket: str, year: int, month: int) -> frozenset | N
         )
         if not codes:
             logger.warning(
-                "Country-month lookup has no federations for %s; querying all federations",
+                "Country-month lookup has no federations for %s; querying all",
                 year_month,
             )
             return None
         logger.info(
-            "Country-month lookup loaded: %d/%d federations have data for %s",
+            "Country-month lookup: %d/%d federations have data for %s",
             len(codes),
             len(country_months),
             year_month,
@@ -76,25 +84,57 @@ def _load_federation_filter(bucket: str, year: int, month: int) -> frozenset | N
         return codes
     except ClientError as e:
         if e.response["Error"]["Code"] in ("NoSuchKey", "404"):
-            logger.info(
-                "No country-months lookup at %s/%s; querying all federations",
-                bucket,
-                COUNTRY_MONTHS_KEY,
-            )
+            logger.info("No country-months lookup; querying all federations")
         else:
-            logger.warning(
-                "Failed to load country-months lookup (%s); querying all federations", e
-            )
+            logger.warning("Country-months lookup failed (%s); querying all", e)
         return None
     except Exception as e:
-        logger.warning(
-            "Failed to load country-months lookup: %s; querying all federations", e
-        )
+        logger.warning("Country-months lookup failed: %s; querying all", e)
         return None
+
+
+def _s3_io(bucket: str, base: str):
+    from tournament_list import PARTS_DIR
+
+    s3 = boto3.client("s3")
+    parts_prefix = f"{base}/{PARTS_DIR}/"
+
+    def list_parts() -> set[str]:
+        return {
+            k.rsplit("/", 1)[-1][: -len(".json")]
+            for k, _ in list_s3_objects(bucket, parts_prefix)
+            if k.endswith(".json")
+        }
+
+    def read_text(uri: str) -> str:
+        b, k = parse_s3_uri(uri)
+        return s3.get_object(Bucket=b, Key=k)["Body"].read().decode("utf-8")
+
+    def delete_parts(codes) -> None:
+        # Delete every part under the prefix, not just this federation set:
+        # leftovers from an interrupted refresh with a different set would
+        # otherwise make every later run look like a refresh in progress.
+        keys = [{"Key": k} for k, _ in list_s3_objects(bucket, parts_prefix)]
+        for i in range(0, len(keys), 1000):
+            s3.delete_objects(Bucket=bucket, Delete={"Objects": keys[i : i + 1000]})
+
+    return {
+        "list_parts": list_parts,
+        "read_text": read_text,
+        "write": lambda path, content: write_output(content, path),
+        "exists": output_exists,
+        "delete_parts": delete_parts,
+    }
 
 
 def lambda_handler(event: dict, context) -> dict:
-    """Lambda entry point for tournaments scraper."""
+    """Lambda entry point for the tournaments step."""
+    from chunk_worker import make_session
+    from fide_http import AdaptiveRateLimiter, FideBlocked, PoliteFetcher
+    from get_tournaments import read_federations
+    from metrics import chunk_summary, emit
+    from tournament_list import run_tournament_list
+
     configure()
     year = event.get("year")
     month = event.get("month")
@@ -102,82 +142,54 @@ def lambda_handler(event: dict, context) -> dict:
     run_name = event.get("run_name")
     bucket = event.get("bucket", "fide-glicko")
     override = event.get("override", False)
-    federations_s3_uri = event.get("federations_s3_uri")
 
     if year is None or month is None:
-        logger.error("year and month are required")
-        return {
-            "statusCode": 400,
-            "success": False,
-            "error": "year and month are required",
-        }
+        raise ValueError("year and month are required")
     if run_type not in ("prod", "custom", "test"):
-        return {
-            "statusCode": 400,
-            "success": False,
-            "error": f"run_type must be one of prod, custom, test (got {run_type!r})",
-        }
+        raise ValueError(
+            f"run_type must be one of prod, custom, test (got {run_type!r})"
+        )
     if run_type in ("prod", "custom") and not run_name:
-        return {
-            "statusCode": 400,
-            "success": False,
-            "error": "run_name required when run_type is prod or custom",
-        }
+        raise ValueError("run_name required when run_type is prod or custom")
+    year, month = int(year), int(month)
 
     ids_uri = build_s3_uri_for_run(
         bucket, run_type, run_name, "data", "tournament_ids.txt"
     )
-    json_uri = build_s3_uri_for_run(
-        bucket, run_type, run_name, "sample", "tournament_ids_sample.json"
-    )
+    base = build_run_base(run_type, run_name)
+    month_root = f"s3://{bucket}/{base}"
+    io = _s3_io(bucket, base)
 
-    if not override and output_exists(ids_uri):
+    # A list already exists and no refresh asked for (and no refresh in
+    # progress, i.e. no saved parts): nothing to do.
+    if not override and output_exists(ids_uri) and not io["list_parts"]():
         return {
             "statusCode": 200,
             "success": True,
             "skipped": True,
+            "remaining": 0,
+            "progress": 0,
             "output_path": ids_uri,
-            "message": "Output already exists; left as-is (pass override=true to replace)",
         }
 
-    if federations_s3_uri is None:
-        federations_s3_uri = resolve_latest_federations_uri(bucket)
-        if not federations_s3_uri:
-            return {
-                "statusCode": 404,
-                "success": False,
-                "error": "No federations found; run federations Lambda first",
-                "ids_uri": ids_uri,
-            }
+    federations_s3_uri = event.get(
+        "federations_s3_uri"
+    ) or resolve_latest_federations_uri(bucket)
+    if not federations_s3_uri:
+        raise RuntimeError("No federations found; run federations Lambda first")
+    fed_path = Path(tempfile.gettempdir()) / "federations.csv"
+    download_to_file(federations_s3_uri, fed_path)
+    federations = [code for code, _ in read_federations(fed_path)]
+    fed_filter = _load_federation_filter(bucket, year, month)
+    if fed_filter is not None:
+        federations = [c for c in federations if c in fed_filter]
 
-    tm = event.get("tournaments_max_concurrency")
-    max_concurrency = int(tm) if tm is not None else 1
-    if max_concurrency < 1:
-        max_concurrency = 1
-
-    federation_filter = _load_federation_filter(bucket, int(year), int(month))
-
-    logger.info(
-        "Starting tournaments scrape: year=%s month=%s bucket=%s run_type=%s run_name=%s "
-        "override=%s tournaments_max_concurrency=%s -> %s",
-        year,
-        month,
-        bucket,
-        run_type,
-        run_name,
-        override,
-        max_concurrency,
-        ids_uri,
-    )
-
-    base_key = build_run_base(run_type, run_name)
-    base_uri = f"s3://{bucket}/{base_key}"
     write_run_metadata(
-        base_uri,
+        month_root,
         {
             "step": "tournaments",
-            "year": int(year),
-            "month": int(month),
+            "year": year,
+            "month": month,
             "run_type": run_type,
             "run_name": run_name or "",
             "federations_uri": federations_s3_uri,
@@ -185,29 +197,54 @@ def lambda_handler(event: dict, context) -> dict:
         merge=True,
     )
 
-    exit_code = run(
-        year=int(year),
-        month=int(month),
-        federations_s3_uri=federations_s3_uri,
-        override=override,
-        quiet=False,
-        ids_uri=ids_uri,
-        json_uri=json_uri,
-        max_concurrency=max_concurrency,
-        lambda_context=context,
-        federation_filter=federation_filter,
+    rate = rate_limit_req_s(event, "tournaments_rate_limit", 0.3)
+    fetcher = PoliteFetcher(
+        AdaptiveRateLimiter(rate), hard_deadline=hard_deadline_from_context(context)
+    )
+    logger.info(
+        "Tournament list %d-%02d: %d federations at %.2f req/s",
+        year,
+        month,
+        len(federations),
+        rate,
     )
 
-    if exit_code != 0:
-        logger.error("Tournaments scrape failed with exit code %d", exit_code)
-        raise RuntimeError(
-            f"Tournaments scrape failed for {year}-{month:02d}: one or more federations "
-            "could not be fetched (fail fast)"
+    def summarize(result, blocked, error=None):
+        emit(
+            chunk_summary(
+                kind="tournaments",
+                run_name=run_name,
+                chunk=f"{year}-{month:02d}",
+                fetch_stats=fetcher.stats(),
+                chunk_result=result,
+                blocked=blocked,
+                error=error,
+            )
         )
 
-    logger.info("Tournaments scrape completed successfully")
+    try:
+        result = run_tournament_list(
+            month_root=month_root,
+            year=year,
+            month=month,
+            federations=federations,
+            fetcher=fetcher,
+            session=make_session(),
+            deadline=deadline_from_context(context),
+            expect_data=fed_filter or frozenset(),
+            **io,
+        )
+    except FideBlocked as e:
+        summarize(None, True, str(e))
+        raise
+    except Exception as e:
+        summarize(None, False, f"{type(e).__name__}: {e}")
+        raise
+    summarize(result, False)
     return {
         "statusCode": 200,
         "success": True,
         "output_path": ids_uri,
+        "rate_limit": rate,
+        **result,
     }

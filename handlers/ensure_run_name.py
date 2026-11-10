@@ -7,8 +7,8 @@ For test: run_name defaults to "test" when omitted.
 
 When the handler runs in **AWS Lambda** (Step Functions), optional tuning is
 merged from SSM (``PIPELINE_CONFIG_SSM_PARAM``) for any key omitted from the
-execution input: chunk_size, max_concurrency, tournaments_max_concurrency,
-details_rate_limit, reports_rate_limit. Local runs do not read SSM.
+execution input: chunk_size, max_concurrency, details_rate_limit,
+reports_rate_limit, tournaments_rate_limit. Local runs do not read SSM.
 Precedence: execution input > SSM JSON > code defaults below.
 
 Event shape (passthrough from execution input):
@@ -19,16 +19,21 @@ Event shape (passthrough from execution input):
     "run_name": null,
     "bucket": "fide-glicko",
     "override": false,
-    "max_concurrency": 5,
-    "chunk_size": 300,
-    "details_rate_limit": 0.33,
-    "reports_rate_limit": 0.33
+    "max_concurrency": 1,
+    "chunk_size": 175,
+    "details_rate_limit": 0.3,
+    "reports_rate_limit": 0.3,
+    "tournaments_rate_limit": 0.3
 }
 
 Returns the same input with run_name set. Fails with 400 if validation fails.
 """
 
+import logging
+
 from .pipeline_ssm import load_pipeline_config_from_ssm
+
+logger = logging.getLogger(__name__)
 
 
 def lambda_handler(event: dict, context) -> dict:
@@ -68,10 +73,19 @@ def lambda_handler(event: dict, context) -> dict:
     out.setdefault("bucket", "fide-glicko")
     out.setdefault("override", False)
     out.setdefault("chunk_size", 175)
-    out.setdefault("max_concurrency", 5)
-    out.setdefault("details_rate_limit", 0.25)
-    out.setdefault("reports_rate_limit", 0.4)
-    # Optional; Tournaments Lambda uses default 1 if null (avoid JSONPath missing-key errors)
-    if "tournaments_max_concurrency" not in out:
-        out["tournaments_max_concurrency"] = None
+    out.setdefault("max_concurrency", 1)
+    out.setdefault("details_rate_limit", 0.3)
+    out.setdefault("reports_rate_limit", 0.3)
+    out.setdefault("tournaments_rate_limit", 0.3)
+    # Optional federations CSV to use instead of the latest one (e.g. a small
+    # subset for a test run). Always present so the ASL path resolves.
+    out.setdefault("federations_s3_uri", None)
+    # FIDE blocks per IP: one chunk at a time unless parallelism is asked for
+    # explicitly. (Map MaxConcurrency 0 would mean unlimited.)
+    if out.get("max_concurrency") != 1 and not out.get("allow_parallel"):
+        logger.warning(
+            "max_concurrency=%r ignored; using 1 (set allow_parallel to override)",
+            out.get("max_concurrency"),
+        )
+        out["max_concurrency"] = 1
     return out

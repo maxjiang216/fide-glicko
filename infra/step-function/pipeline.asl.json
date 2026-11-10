@@ -28,6 +28,13 @@
       "ResultPath": "$.federations",
       "Retry": [
         {
+          "ErrorEquals": ["FideBlocked"],
+          "IntervalSeconds": 1800,
+          "MaxAttempts": 5,
+          "BackoffRate": 2,
+          "MaxDelaySeconds": 14400
+        },
+        {
           "ErrorEquals": ["Lambda.ServiceException", "Lambda.TooManyRequestsException"],
           "IntervalSeconds": 2,
           "MaxAttempts": 3,
@@ -54,10 +61,24 @@
         "run_name.$": "$.run_name",
         "bucket.$": "$.bucket",
         "override.$": "$.override",
-        "tournaments_max_concurrency.$": "$.tournaments_max_concurrency"
+        "tournaments_rate_limit.$": "$.tournaments_rate_limit",
+        "federations_s3_uri.$": "$.federations_s3_uri"
       },
       "ResultPath": "$.tournaments",
       "Retry": [
+        {
+          "ErrorEquals": ["FideBlocked"],
+          "IntervalSeconds": 1800,
+          "MaxAttempts": 5,
+          "BackoffRate": 2,
+          "MaxDelaySeconds": 14400
+        },
+        {
+          "ErrorEquals": ["Sandbox.Timedout"],
+          "IntervalSeconds": 30,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        },
         {
           "ErrorEquals": ["Lambda.ServiceException", "Lambda.TooManyRequestsException"],
           "IntervalSeconds": 2,
@@ -72,7 +93,33 @@
           "Next": "PipelineFailed"
         }
       ],
-      "Next": "ParallelSplitIdsAndPlayerList"
+      "Next": "TournamentsProgress"
+    },
+
+    "TournamentsProgress": {
+      "Type": "Choice",
+      "Comment": "Resumable: call again while federations remain and the last call made progress",
+      "Choices": [
+        {
+          "And": [
+            {"Variable": "$.tournaments.remaining", "NumericGreaterThan": 0},
+            {"Variable": "$.tournaments.progress", "NumericGreaterThan": 0}
+          ],
+          "Next": "Tournaments"
+        },
+        {
+          "Variable": "$.tournaments.remaining",
+          "NumericGreaterThan": 0,
+          "Next": "TournamentsStuck"
+        }
+      ],
+      "Default": "ParallelSplitIdsAndPlayerList"
+    },
+
+    "TournamentsStuck": {
+      "Type": "Fail",
+      "Error": "TournamentsStuck",
+      "Cause": "A tournaments call made no progress while federations remain. See the tournaments Lambda logs (chunk_summary failed_sample)."
     },
 
     "ParallelSplitIdsAndPlayerList": {
@@ -166,10 +213,10 @@
         "tournaments.$": "$.tournaments",
         "parallel_split_player.$": "$.parallel_split_player",
         "chunk_size.$": "$.chunk_size",
-        "tournaments_max_concurrency.$": "$.tournaments_max_concurrency",
+        "tournaments_rate_limit.$": "$.tournaments_rate_limit",
         "details_rate_limit.$": "$.details_rate_limit",
         "reports_rate_limit.$": "$.reports_rate_limit",
-        "max_concurrency": 5
+        "max_concurrency": 1
       },
       "Next": "MapDetailsAndReports"
     },
@@ -189,8 +236,8 @@
         "run_name.$": "$$.Map.Item.Value.run_name",
         "chunk_index.$": "$$.Map.Item.Value.chunk_index",
         "chunk_count.$": "$$.Map.Item.Value.chunk_count",
-        "bucket.$": "$$.Execution.Input.bucket",
-        "override.$": "$$.Execution.Input.override",
+        "bucket.$": "$.bucket",
+        "override.$": "$.override",
         "details_rate_limit.$": "$.details_rate_limit",
         "reports_rate_limit.$": "$.reports_rate_limit"
       },
@@ -212,6 +259,13 @@
             "ResultPath": "$.details_result",
             "Retry": [
               {
+                "ErrorEquals": ["FideBlocked"],
+                "IntervalSeconds": 1800,
+                "MaxAttempts": 5,
+                "BackoffRate": 2,
+                "MaxDelaySeconds": 14400
+              },
+              {
                 "ErrorEquals": ["Lambda.TooManyRequestsException"],
                 "IntervalSeconds": 10,
                 "MaxAttempts": 6,
@@ -226,6 +280,7 @@
               {
                 "ErrorEquals": [
                   "Lambda.ClientExecutionTimeoutException",
+                  "Sandbox.Timedout",
                   "Lambda.SdkClientException",
                   "Lambda.Unknown"
                 ],
@@ -234,14 +289,26 @@
                 "BackoffRate": 2
               }
             ],
-            "Catch": [
+            "Next": "DetailsProgress"
+          },
+          "DetailsProgress": {
+            "Type": "Choice",
+            "Comment": "Resumable worker: call again while work remains and the last call made progress",
+            "Choices": [
               {
-                "ErrorEquals": ["States.ALL"],
-                "ResultPath": "$.error",
-                "Next": "ChunkFailed"
+                "And": [
+                  {"Variable": "$.details_result.remaining", "NumericGreaterThan": 0},
+                  {"Variable": "$.details_result.progress", "NumericGreaterThan": 0}
+                ],
+                "Next": "DetailsChunk"
+              },
+              {
+                "Variable": "$.details_result.remaining",
+                "NumericGreaterThan": 0,
+                "Next": "ChunkStuck"
               }
             ],
-            "Next": "ReportsChunk"
+            "Default": "ReportsChunk"
           },
           "ReportsChunk": {
             "Type": "Task",
@@ -253,10 +320,17 @@
               "chunk_count.$": "$.chunk_count",
               "bucket.$": "$.bucket",
               "override.$": "$.override",
-              "save_raw": true,
               "reports_rate_limit.$": "$.reports_rate_limit"
             },
+            "ResultPath": "$.reports_result",
             "Retry": [
+              {
+                "ErrorEquals": ["FideBlocked"],
+                "IntervalSeconds": 1800,
+                "MaxAttempts": 5,
+                "BackoffRate": 2,
+                "MaxDelaySeconds": 14400
+              },
               {
                 "ErrorEquals": ["Lambda.TooManyRequestsException"],
                 "IntervalSeconds": 10,
@@ -272,6 +346,7 @@
               {
                 "ErrorEquals": [
                   "Lambda.ClientExecutionTimeoutException",
+                  "Sandbox.Timedout",
                   "Lambda.SdkClientException",
                   "Lambda.Unknown"
                 ],
@@ -280,24 +355,37 @@
                 "BackoffRate": 2
               }
             ],
-            "End": true
+            "Next": "ReportsProgress"
           },
-          "ChunkFailed": {
-            "Type": "Pass",
-            "Result": {"error": "Chunk processing failed"},
-            "End": true
+          "ReportsProgress": {
+            "Type": "Choice",
+            "Choices": [
+              {
+                "And": [
+                  {"Variable": "$.reports_result.remaining", "NumericGreaterThan": 0},
+                  {"Variable": "$.reports_result.progress", "NumericGreaterThan": 0}
+                ],
+                "Next": "ReportsChunk"
+              },
+              {
+                "Variable": "$.reports_result.remaining",
+                "NumericGreaterThan": 0,
+                "Next": "ChunkStuck"
+              }
+            ],
+            "Default": "ChunkDone"
+          },
+          "ChunkDone": {
+            "Type": "Succeed"
+          },
+          "ChunkStuck": {
+            "Type": "Fail",
+            "Error": "ChunkStuck",
+            "Cause": "A chunk invocation made no progress while tournaments remain (repeated non-block errors). See the chunk Lambda logs for failed_sample."
           }
         }
       },
-      "ResultPath": "$.map_results",
-      "Retry": [
-        {
-          "ErrorEquals": ["States.ALL"],
-          "IntervalSeconds": 30,
-          "MaxAttempts": 4,
-          "BackoffRate": 2
-        }
-      ],
+      "ResultPath": null,
       "Catch": [
         {
           "ErrorEquals": ["States.ALL"],

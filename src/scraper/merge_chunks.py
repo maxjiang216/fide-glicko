@@ -1,59 +1,25 @@
 """
 Merge tournament details and reports chunk parquets into single files.
 
-Reads from {base}/data/tournament_details_chunks/details_chunk_*.parquet and
-{base}/data/tournament_reports_chunks/reports_chunk_*_players.parquet, reports_chunk_*_games.parquet,
-concatenates, and writes to {base}/data/:
+Reads every chunk under {base}/data/tournament_details_chunks/ and
+{base}/data/tournament_reports_chunks/, from all chunk sets ever written for the
+month, keeps the newest rows per tournament, and writes to {base}/data/:
   - tournament_details.parquet
   - tournament_reports_players.parquet
   - tournament_reports_games.parquet
+
+The merge refuses to write anything unless every tournament in
+tournament_ids.txt has details and either reports or a page-structure skip
+(see coverage.py). A partial month raises IncompleteRunError instead of being
+merged and marked done.
 """
 
 import io
 import logging
-import re
+
+from coverage import IncompleteRunError, load_month  # noqa: F401 (re-export)
 
 logger = logging.getLogger(__name__)
-
-
-# Chunk filenames: details_chunk_0_of_15.parquet (new) or details_chunk_0.parquet (legacy)
-def _details_re(n: int | None) -> re.Pattern:
-    if n is not None:
-        return re.compile(rf"details_chunk_(\d+)_of_{n}\.parquet$")
-    return re.compile(r"details_chunk_(\d+)\.parquet$")
-
-
-def _reports_players_re(n: int | None) -> re.Pattern:
-    if n is not None:
-        return re.compile(rf"reports_chunk_(\d+)_of_{n}_players\.parquet$")
-    return re.compile(r"reports_chunk_(\d+)_players\.parquet$")
-
-
-def _reports_games_re(n: int | None) -> re.Pattern:
-    if n is not None:
-        return re.compile(rf"reports_chunk_(\d+)_of_{n}_games\.parquet$")
-    return re.compile(r"reports_chunk_(\d+)_games\.parquet$")
-
-
-def _parse_chunk_index(key: str, pattern: re.Pattern) -> int | None:
-    """Extract chunk index from key like 'prod/2024-01/data/tournament_details_chunks/details_chunk_3.parquet'."""
-    parts = key.split("/")
-    if not parts:
-        return None
-    name = parts[-1]
-    m = pattern.match(name)
-    return int(m.group(1)) if m else None
-
-
-def _sorted_chunk_keys(keys: list[str], pattern: re.Pattern) -> list[str]:
-    """Filter keys matching pattern, sort by chunk index ascending."""
-    indexed = []
-    for k in keys:
-        idx = _parse_chunk_index(k, pattern)
-        if idx is not None:
-            indexed.append((idx, k))
-    indexed.sort(key=lambda x: x[0])
-    return [k for _, k in indexed]
 
 
 def run(
@@ -62,6 +28,7 @@ def run(
     run_name: str | None,
     override: bool = False,
     quiet: bool = False,
+    allow_incomplete: bool = False,
 ) -> dict:
     """
     Merge details and reports chunks into single parquet files in {base}/data/.
@@ -70,19 +37,22 @@ def run(
         bucket: S3 bucket.
         run_type: prod | custom | test.
         run_name: Required for prod/custom. Ignored for test.
-        override: If True, overwrite existing merged files.
+        override: Ignored. Merged files are always rewritten from the chunks,
+            since earlier merges may have been partial. Kept for event compat.
         quiet: Reduce log output.
+        allow_incomplete: Merge even if tournaments are missing. Only for
+            offline inspection; the pipeline never sets it.
 
     Returns:
-        Dict with details_uri, reports_players_uri, reports_games_uri, details_chunks, reports_chunks.
+        Dict with merged URIs, row counts, file counts and coverage summary.
+
+    Raises:
+        IncompleteRunError: some tournaments lack details or reports.
     """
     from s3_io import (
         build_run_base,
         build_s3_uri_for_run,
-        list_s3_objects,
-        output_exists,
         parse_s3_uri,
-        read_run_metadata,
         write_run_metadata,
     )
 
@@ -90,32 +60,6 @@ def run(
         logging.getLogger().setLevel(logging.WARNING)
 
     base = build_run_base(run_type, run_name)
-    base_uri = f"s3://{bucket}/{base}"
-    metadata = read_run_metadata(base_uri)
-    chunk_count = metadata.get("chunk_count") if metadata else None
-
-    details_prefix = f"{base}/data/tournament_details_chunks/"
-    reports_prefix = f"{base}/data/tournament_reports_chunks/"
-
-    details_objs = list_s3_objects(bucket, details_prefix)
-    reports_objs = list_s3_objects(bucket, reports_prefix)
-
-    # Prefer new naming (_of_{n}); fall back to legacy for existing runs
-    for try_chunk_count in [chunk_count, None]:
-        details_re = _details_re(try_chunk_count)
-        players_re = _reports_players_re(try_chunk_count)
-        games_re = _reports_games_re(try_chunk_count)
-        details_keys = _sorted_chunk_keys([k for k, _ in details_objs], details_re)
-        players_keys = _sorted_chunk_keys([k for k, _ in reports_objs], players_re)
-        games_keys = _sorted_chunk_keys([k for k, _ in reports_objs], games_re)
-        if details_keys and players_keys and games_keys:
-            break
-    else:
-        raise RuntimeError(
-            f"No details/reports chunks found under s3://{bucket}/{details_prefix} "
-            f"(tried both details_chunk_*_of_{{n}}.parquet and details_chunk_*.parquet)"
-        )
-
     details_uri = build_s3_uri_for_run(
         bucket, run_type, run_name, "data", "tournament_details.parquet"
     )
@@ -126,98 +70,44 @@ def run(
         bucket, run_type, run_name, "data", "tournament_reports_games.parquet"
     )
 
-    if not override:
-        if (
-            output_exists(details_uri)
-            and output_exists(players_uri)
-            and output_exists(games_uri)
-        ):
-            logger.info(
-                "Merged files already exist (override=false), skipping: %s",
-                details_uri,
-            )
-            return {
-                "details_uri": details_uri,
-                "reports_players_uri": players_uri,
-                "reports_games_uri": games_uri,
-                "details_chunks": len(details_keys),
-                "reports_chunks": len(players_keys),
-            }
+    month = load_month(bucket, base)
+    cov = month.coverage()
+    logger.info("Coverage for %s: %s", base, cov.summary(sample=5))
+    if not allow_incomplete:
+        cov.raise_if_incomplete(f"Refusing to merge s3://{bucket}/{base}")
+
+    result = {
+        "details_uri": details_uri,
+        "reports_players_uri": players_uri,
+        "reports_games_uri": games_uri,
+        "files": month.files,
+        "rows": {
+            "details": month.details.num_rows,
+            "players": month.players.num_rows,
+            "games": month.games.num_rows,
+        },
+        "coverage": cov.summary(),
+    }
 
     import boto3
-    import pyarrow as pa
     import pyarrow.parquet as pq
 
     s3 = boto3.client("s3")
 
-    def _read_parquet(key: str) -> pa.Table:
-        obj = s3.get_object(Bucket=bucket, Key=key)
-        return pq.read_table(io.BytesIO(obj["Body"].read()))
-
-    def _concat_tables_unified(tables: list[pa.Table]) -> pa.Table:
-        """Concat tables, unifying schemas (e.g. n_players int64 vs double)."""
-        if not tables:
-            return pa.table({})
-        try:
-            return pa.concat_tables(tables, promote_options="permissive")
-        except pa.ArrowInvalid:
-            # Fallback: pandas concat handles mixed types (PyArrow < 14 or edge cases)
-            import pandas as pd
-
-            dfs = [t.to_pandas() for t in tables]
-            return pa.Table.from_pandas(pd.concat(dfs, ignore_index=True))
-
-    def _write_parquet(table: pa.Table, uri: str) -> None:
+    def _write_parquet(table, uri: str) -> None:
         buf = io.BytesIO()
         pq.write_table(table, buf)
-        buf.seek(0)
         b, k = parse_s3_uri(uri)
         s3.put_object(Bucket=b, Key=k, Body=buf.getvalue())
+        logger.info("Wrote %d rows -> %s", table.num_rows, uri)
 
-    # Merge details
-    logger.info("Merging %d details chunks -> %s", len(details_keys), details_uri)
-    details_tables = [_read_parquet(k) for k in details_keys]
-    details_merged = _concat_tables_unified(details_tables)
-    _write_parquet(details_merged, details_uri)
-    del details_tables, details_merged
+    _write_parquet(month.details, details_uri)
+    _write_parquet(month.players, players_uri)
+    _write_parquet(month.games, games_uri)
 
-    # Merge reports players
-    logger.info(
-        "Merging %d reports players chunks -> %s", len(players_keys), players_uri
-    )
-    players_tables = [_read_parquet(k) for k in players_keys]
-    players_merged = _concat_tables_unified(players_tables)
-    _write_parquet(players_merged, players_uri)
-    del players_tables, players_merged
-
-    # Merge reports games
-    logger.info("Merging %d reports games chunks -> %s", len(games_keys), games_uri)
-    games_tables = [_read_parquet(k) for k in games_keys]
-    games_merged = _concat_tables_unified(games_tables)
-    _write_parquet(games_merged, games_uri)
-
-    base_uri = f"s3://{bucket}/{base}"
     write_run_metadata(
-        base_uri,
-        {
-            "step": "merge_chunks",
-            "details_chunks": len(details_keys),
-            "reports_chunks": len(players_keys),
-        },
+        f"s3://{bucket}/{base}",
+        {"step": "merge_chunks", "files": month.files, "coverage": cov.summary(0)},
         merge=True,
     )
-
-    logger.info(
-        "Merge completed: details=%s, reports_players=%s, reports_games=%s",
-        details_uri,
-        players_uri,
-        games_uri,
-    )
-
-    return {
-        "details_uri": details_uri,
-        "reports_players_uri": players_uri,
-        "reports_games_uri": games_uri,
-        "details_chunks": len(details_keys),
-        "reports_chunks": len(players_keys),
-    }
+    return result

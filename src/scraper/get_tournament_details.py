@@ -13,6 +13,7 @@ import json
 import logging
 import os
 import random
+import re
 import signal
 import sys
 import tempfile
@@ -25,6 +26,8 @@ from typing import Dict, List, Optional, Tuple
 import pandas as pd
 import pyarrow.parquet as pq
 import requests
+
+from fide_http import USER_AGENT, AdaptiveRateLimiter, PoliteFetcher
 from bs4 import BeautifulSoup
 from tqdm import tqdm
 
@@ -180,23 +183,22 @@ def extract_link_href(cell) -> str:
     return ""
 
 
-def parse_time_control(raw: str) -> tuple[str, bool]:
+def parse_time_control(raw: str) -> tuple[Optional[str], bool]:
     """
     Parse time_control to S (standard), R (rapid), or B (blitz).
-    First word (case-insensitive): blitz->B, rapid->R, standard->S.
-    Otherwise default to S and return (S, True) to indicate it was defaulted.
+
+    FIDE writes e.g. "Standard: 60' + 30''", "Rapid: 15-15 min/all",
+    "Blitz: 5 min". The first word decides (case-insensitive, punctuation
+    ignored). Empty or unrecognised values return (None, True): they must not
+    be counted as standard, since only S games feed the Glicko ratings.
     Returns (code, was_defaulted).
     """
-    if not raw or not str(raw).strip():
-        return "S", False
-    first = str(raw).strip().split()[0].lower() if str(raw).strip().split() else ""
-    if first == "blitz":
-        return "B", False
-    if first == "rapid":
-        return "R", False
-    if first == "standard":
-        return "S", False
-    return "S", True
+    words = re.findall(r"[a-z]+", str(raw or "").lower())
+    first = words[0] if words else ""
+    code = {"standard": "S", "rapid": "R", "blitz": "B"}.get(first)
+    if code is None:
+        return None, True
+    return code, False
 
 
 def parse_n_players(raw: str) -> tuple[Optional[int], bool]:
@@ -240,6 +242,7 @@ def fetch_tournament_details(
     *,
     _attempt_log: Optional[List[Dict]] = None,
     return_raw: bool = False,
+    max_attempts: int = 3,
 ) -> Tuple[Optional[Dict], Optional[str], int, Optional[bytes]]:
     """
     Fetch tournament details from FIDE website.
@@ -250,7 +253,7 @@ def fetch_tournament_details(
     """
     url = f"https://ratings.fide.com/tournament_information.phtml?event={tournament_id}"
 
-    max_retries = 3
+    max_retries = max_attempts
     last_error = None
     attempt_times: List[float] = []
 
@@ -268,7 +271,7 @@ def fetch_tournament_details(
 
         try:
             headers = {
-                "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                "User-Agent": USER_AGENT,
                 "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
                 "Accept-Language": "en-US,en;q=0.9",
                 "Cache-Control": "max-age=0",
@@ -633,19 +636,22 @@ def save_time_control_unique_values(results: List[Dict], output_path: str):
 _NULLABLE_NUMERIC_COLS = ("n_players",)
 
 
+def results_to_parquet_bytes(results: List[Dict]) -> bytes:
+    """Serialize details results to Parquet bytes."""
+    df = results_to_dataframe(results)
+    for col in _NULLABLE_NUMERIC_COLS:
+        if col in df.columns:
+            df[col] = df[col].astype("float64")
+    buf = io.BytesIO()
+    df.to_parquet(buf, index=False, engine="pyarrow")
+    return buf.getvalue()
+
+
 def save_results_parquet(results: List[Dict], parquet_path: str) -> None:
-    """Save results as Parquet file (local or S3)."""
-    try:
-        df = results_to_dataframe(results)
-        for col in _NULLABLE_NUMERIC_COLS:
-            if col in df.columns:
-                df[col] = df[col].astype("float64")
-        buf = io.BytesIO()
-        df.to_parquet(buf, index=False, engine="pyarrow")
-        _write_to_path(parquet_path, buf.getvalue())
-        logger.info(f"Saved {len(results)} records to {parquet_path}")
-    except Exception as e:
-        logger.error(f"Parquet save failed: {e}")
+    """Save results as Parquet file (local or S3). Raises on failure: a chunk
+    must never be reported done while its output is missing."""
+    _write_to_path(parquet_path, results_to_parquet_bytes(results))
+    logger.info(f"Saved {len(results)} records to {parquet_path}")
 
 
 def save_results_json_sample(
@@ -677,7 +683,7 @@ def save_failures_json(results: List[Dict], base_path: str) -> None:
     ]
     if not failures:
         return
-    path = base_path.rstrip(".parquet") + "_failures.json"
+    path = base_path.removesuffix(".parquet") + "_failures.json"
     content = json.dumps(failures, indent=2, ensure_ascii=False)
     _write_to_path(path, content)
     logger.info(f"Saved {len(failures)} failures to {path}")
@@ -891,7 +897,7 @@ def run(
     )
     session.mount("http://", adapter)
     session.mount("https://", adapter)
-    rate_limiter = RateLimiter(rate_limit)
+    fetcher = PoliteFetcher(AdaptiveRateLimiter(rate_limit))
 
     raw_base: Optional[str] = (
         _raw_base_from_output_path(output_path) if save_raw else None
@@ -914,8 +920,6 @@ def run(
         )
 
     start_time = time.time()
-    consecutive_connect_timeouts = 0
-    CONSECUTIVE_CONNECT_TIMEOUT_THRESHOLD = 2
 
     for pass_num in range(max_retries + 1):
         if not current_tournaments:
@@ -930,13 +934,16 @@ def run(
             )
             time.sleep(delay)
             total_retries += len(current_tournaments)
-            consecutive_connect_timeouts = 0  # reset on new pass
 
         pass_failed = []
         for tournament_id in current_tournaments:
-            rate_limiter.wait()
-            details, error, _, raw_content = fetch_tournament_details(
-                tournament_id, session, return_raw=save_raw
+            # Raises FideBlocked if FIDE is blocking us; strain is retried
+            # (slower) inside the fetcher.
+            details, error, _, raw_content = fetcher.fetch(
+                f"details {tournament_id}",
+                lambda **kw: fetch_tournament_details(
+                    tournament_id, session, return_raw=save_raw, **kw
+                ),
             )
 
             result = {"tournament_id": tournament_id}
@@ -950,21 +957,6 @@ def run(
                 result["success"] = False
                 result["error"] = error or "fetch failed"
                 error_lower = (error or "").lower()
-                is_connect_timeout = (
-                    "connect" in error_lower and "timeout" in error_lower
-                ) or "connecttimeout" in error_lower
-                if is_connect_timeout:
-                    consecutive_connect_timeouts += 1
-                    if (
-                        consecutive_connect_timeouts
-                        >= CONSECUTIVE_CONNECT_TIMEOUT_THRESHOLD
-                    ):
-                        raise RuntimeError(
-                            f"Details fetch: {CONSECUTIVE_CONNECT_TIMEOUT_THRESHOLD} consecutive "
-                            "connect timeouts; aborting chunk so Step Function can retry with fresh Lambda"
-                        ) from None
-                else:
-                    consecutive_connect_timeouts = 0
                 network_error_patterns = [
                     "eof",
                     "connection reset",
@@ -981,7 +973,6 @@ def run(
                 ):
                     pass_failed.append(tournament_id)
             else:
-                consecutive_connect_timeouts = 0
                 success_count += 1
                 result["success"] = True
                 result["details"] = details

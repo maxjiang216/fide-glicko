@@ -35,17 +35,11 @@ def lambda_handler(event: dict, context) -> dict:
     bucket = event.get("bucket", "fide-glicko")
 
     if run_type not in ("prod", "custom", "test"):
-        return {
-            "statusCode": 400,
-            "success": False,
-            "error": f"run_type must be one of prod, custom, test (got {run_type!r})",
-        }
+        raise ValueError(
+            f"run_type must be one of prod, custom, test (got {run_type!r})"
+        )
     if run_type in ("prod", "custom") and not run_name:
-        return {
-            "statusCode": 400,
-            "success": False,
-            "error": "run_name required when run_type is prod or custom",
-        }
+        raise ValueError("run_name required when run_type is prod or custom")
 
     logger.info(
         "Starting validation: bucket=%s run_type=%s run_name=%s",
@@ -54,20 +48,12 @@ def lambda_handler(event: dict, context) -> dict:
         run_name,
     )
 
-    try:
-        result = run(
-            bucket=bucket,
-            run_type=run_type,
-            run_name=run_name,
-            quiet=False,
-        )
-    except RuntimeError as e:
-        logger.error("Validation failed: %s", e)
-        return {
-            "statusCode": 500,
-            "success": False,
-            "error": str(e),
-        }
+    result = run(
+        bucket=bucket,
+        run_type=run_type,
+        run_name=run_name,
+        quiet=False,
+    )
 
     logger.info("Validation completed (has_issues=%s)", result["has_issues"])
     return {

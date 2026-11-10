@@ -118,6 +118,8 @@
         "ecr:GetLifecyclePolicy",
         "ecr:PutLifecyclePolicy",
         "ecr:BatchCheckLayerAvailability",
+        "ecr:BatchGetImage",
+        "ecr:GetDownloadUrlForLayer",
         "ecr:InitiateLayerUpload",
         "ecr:UploadLayerPart",
         "ecr:CompleteLayerUpload",
@@ -142,7 +144,9 @@
     {
       "Sid": "StepFunctionsValidate",
       "Effect": "Allow",
-      "Action": ["states:ValidateStateMachineDefinition"],
+      "Action": [
+        "states:ValidateStateMachineDefinition"
+      ],
       "Resource": "*"
     },
     {
@@ -161,6 +165,34 @@
         "events:UntagResource"
       ],
       "Resource": "arn:aws:events:us-east-1:710271917035:rule/fide-glicko-*"
+    },
+    {
+      "Sid": "SNS",
+      "Effect": "Allow",
+      "Action": [
+        "sns:CreateTopic",
+        "sns:DeleteTopic",
+        "sns:GetTopicAttributes",
+        "sns:SetTopicAttributes",
+        "sns:Subscribe",
+        "sns:Unsubscribe",
+        "sns:GetSubscriptionAttributes",
+        "sns:ListSubscriptionsByTopic",
+        "sns:TagResource",
+        "sns:UntagResource",
+        "sns:ListTagsForResource"
+      ],
+      "Resource": "arn:aws:sns:us-east-1:710271917035:fide-glicko-*"
+    },
+    {
+      "Sid": "CloudWatchDashboard",
+      "Effect": "Allow",
+      "Action": [
+        "cloudwatch:PutDashboard",
+        "cloudwatch:GetDashboard",
+        "cloudwatch:DeleteDashboards"
+      ],
+      "Resource": "arn:aws:cloudwatch::710271917035:dashboard/fide-glicko-*"
     }
   ]
 }
