@@ -77,7 +77,7 @@ Resources:
       CodeUri: .functions/tournaments
       Handler: handlers.tournaments.lambda_handler
       Timeout: 900
-      MemorySize: 256
+      MemorySize: 192
       Policies:
         - S3CrudPolicy:
             BucketName: !Ref DataBucket
@@ -97,7 +97,7 @@ Resources:
         Command:
           - handlers.player_list.lambda_handler
       Timeout: 300
-      MemorySize: 2560
+      MemorySize: 512
       Policies:
         - S3CrudPolicy:
             BucketName: !Ref DataBucket
@@ -155,7 +155,7 @@ Resources:
         Command:
           - handlers.merge_chunks.lambda_handler
       Timeout: 300
-      MemorySize: 2048
+      MemorySize: 512
       Policies:
         - S3CrudPolicy:
             BucketName: !Ref DataBucket
@@ -188,7 +188,7 @@ Resources:
       CodeUri: .functions/split_ids
       Handler: handlers.split_ids.lambda_handler
       Timeout: 120
-      MemorySize: 256
+      MemorySize: 128
       Policies:
         - S3CrudPolicy:
             BucketName: !Ref DataBucket
@@ -222,7 +222,7 @@ Resources:
         HourlySchedule:
           Type: Schedule
           Properties:
-            Schedule: "rate(1 hour)"
+            Schedule: "rate(2 hours)"
             Description: "Backfill orchestrator — disabled by default, enable manually when ready"
             Enabled: false
 
