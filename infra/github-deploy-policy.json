@@ -118,6 +118,8 @@
         "ecr:GetLifecyclePolicy",
         "ecr:PutLifecyclePolicy",
         "ecr:BatchCheckLayerAvailability",
+        "ecr:BatchGetImage",
+        "ecr:GetDownloadUrlForLayer",
         "ecr:InitiateLayerUpload",
         "ecr:UploadLayerPart",
         "ecr:CompleteLayerUpload",
