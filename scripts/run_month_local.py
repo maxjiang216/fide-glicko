@@ -238,7 +238,9 @@ def main() -> int:
         raise SystemExit("give --month or --all-prod")
     logger.info("%d months to run: %s", len(months), " ".join(months))
 
-    results, failed = [], []
+    from coverage import IncompleteRunError
+
+    results, failed, pending = [], [], []
     for i, m in enumerate(months, 1):
         logger.info("##### month %d of %d: %s", i, len(months), m)
         y, mo = (int(x) for x in m.split("-"))
@@ -246,10 +248,15 @@ def main() -> int:
             results.append(run_month(y, mo, args))
         except StillBlocked:
             raise
+        except IncompleteRunError as e:
+            # Usually provisional "no data" skips waiting for a confirming
+            # sighting a day later; the next --all-prod run finishes them.
+            logger.warning("%s not complete yet; moving on: %s", m, e)
+            pending.append({"month": m, "reason": str(e)[:300]})
         except Exception as e:  # one bad month must not stop the backfill
             logger.exception("%s failed; moving on", m)
             failed.append({"month": m, "error": f"{type(e).__name__}: {e}"[:500]})
-    print(json.dumps({"done": results, "failed": failed}, indent=2))
+    print(json.dumps({"done": results, "pending": pending, "failed": failed}, indent=2))
     return 1 if failed else 0
 
 

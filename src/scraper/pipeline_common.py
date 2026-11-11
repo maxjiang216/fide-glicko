@@ -8,6 +8,7 @@ pyarrow/pandas.
 
 from __future__ import annotations
 
+import re
 import secrets
 from datetime import datetime, timezone
 
@@ -20,8 +21,13 @@ SKIPPABLE_ERRORS = frozenset(
 DETAILS_SKIPPABLE_ERRORS = frozenset(["no data found"])
 # FIDE's explicit "report was updated or replaced" wording: trusted on sight.
 STRONG_SKIP_REASONS = frozenset(["report_updated_or_replaced"])
-# Any other skip reason must be seen in this many separate runs to count.
+# Any other skip reason must be seen in this many separate runs to count,
+# and the sightings must be at least SKIP_CONFIRM_GAP_S apart, so one bad
+# period at FIDE (e.g. a backend outage serving empty pages) cannot confirm
+# itself. Until then a recent sighting is provisional: not refetched, but the
+# month is not complete.
 SKIP_CONFIRMATIONS = 2
+SKIP_CONFIRM_GAP_S = 24 * 3600
 
 
 # A tournament that fails (non-skip, non-block error) in this many separate
@@ -34,6 +40,22 @@ def part_stamp() -> str:
     """Unique, time-sortable part name: 20261109T143000_a1b2c3."""
     now = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
     return f"{now}_{secrets.token_hex(3)}"
+
+
+_STAMP_RE = re.compile(r"(\d{8}T\d{6})_[0-9a-f]{6}")
+
+
+def stamp_time(name: str):
+    """UTC epoch seconds of the part_stamp in a file name, or None (legacy
+    chunk files, written by the old pipeline long before any part file)."""
+    m = _STAMP_RE.search(name or "")
+    if not m:
+        return None
+    return (
+        datetime.strptime(m.group(1), "%Y%m%dT%H%M%S")
+        .replace(tzinfo=timezone.utc)
+        .timestamp()
+    )
 
 
 def parse_ids(text: str) -> list[str]:

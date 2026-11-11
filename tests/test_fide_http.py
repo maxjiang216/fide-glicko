@@ -62,7 +62,7 @@ def _script(*errors):
     return fetch, calls
 
 
-@pytest.mark.parametrize("err", [CONNECT_TIMEOUT, REFUSED])
+@pytest.mark.parametrize("err", [CONNECT_TIMEOUT, REFUSED, "empty response (http 200)"])
 def test_block_errors(err):
     assert is_block_error(err)
     assert not is_strain_error(err)
@@ -211,3 +211,45 @@ def test_no_retry_when_attempt_would_pass_hard_deadline():
     with pytest.raises(FideBlocked):  # no time to wait 30s + retry: stop now
         f.fetch("y", fetch)
     assert len(calls) == 1
+
+
+@pytest.mark.parametrize(
+    "body,empty",
+    [
+        (b"\xef\xbb\xbf", True),  # what FIDE served from 2026-11-11
+        (b"", True),
+        (b"  \n ", True),
+        (b"<html>" + b"x" * 5000 + b"</html>", False),
+    ],
+)
+def test_is_empty_page(body, empty):
+    from fide_http import EMPTY_PAGE_ERROR, is_block_error, is_empty_page
+
+    assert is_empty_page(body) is empty
+    assert is_block_error(EMPTY_PAGE_ERROR)
+
+
+@pytest.mark.parametrize("module", ["get_tournament_reports", "get_tournament_details"])
+def test_empty_page_is_not_no_data(module):
+    import importlib
+
+    from fide_http import EMPTY_PAGE_ERROR
+
+    mod = importlib.import_module(module)
+    fetch = (
+        mod.fetch_tournament_report
+        if module == "get_tournament_reports"
+        else mod.fetch_tournament_details
+    )
+
+    class Resp:
+        status_code = 200
+        content = b"\xef\xbb\xbf"
+        text = "\ufeff"
+
+    class Session:
+        def get(self, *a, **k):
+            return Resp()
+
+    result, error, _, _ = fetch("365437", Session(), max_attempts=1)
+    assert result is None and error == EMPTY_PAGE_ERROR

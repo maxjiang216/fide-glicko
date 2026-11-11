@@ -27,7 +27,13 @@ import pandas as pd
 import pyarrow.parquet as pq
 import requests
 
-from fide_http import USER_AGENT, AdaptiveRateLimiter, PoliteFetcher
+from fide_http import (
+    EMPTY_PAGE_ERROR,
+    USER_AGENT,
+    AdaptiveRateLimiter,
+    PoliteFetcher,
+    is_empty_page,
+)
 from bs4 import BeautifulSoup
 from tqdm import tqdm
 
@@ -310,6 +316,9 @@ def fetch_tournament_details(
                         }
                     )
                 continue
+
+            if is_empty_page(response.content):
+                return None, EMPTY_PAGE_ERROR, len(attempt_times), None
 
             raw_content = response.content if return_raw else None
             soup = BeautifulSoup(response.content, "html.parser")

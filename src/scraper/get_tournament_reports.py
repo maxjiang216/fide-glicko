@@ -28,7 +28,13 @@ from typing import Dict, List, Optional, Tuple
 import pandas as pd
 import requests
 
-from fide_http import USER_AGENT, AdaptiveRateLimiter, PoliteFetcher
+from fide_http import (
+    EMPTY_PAGE_ERROR,
+    USER_AGENT,
+    AdaptiveRateLimiter,
+    PoliteFetcher,
+    is_empty_page,
+)
 from bs4 import BeautifulSoup
 from tqdm import tqdm
 
@@ -511,6 +517,9 @@ def fetch_tournament_report(
                         }
                     )
                 continue
+
+            if is_empty_page(response.content):
+                return None, EMPTY_PAGE_ERROR, len(attempt_times), None
 
             soup = BeautifulSoup(response.content, "html.parser")
 

@@ -39,10 +39,25 @@ USER_AGENT = (
     "+https://github.com/maxjiang216/fide-glicko)"
 )
 
+# A real FIDE page (even one saying "no data") carries the full site layout,
+# tens of KB. A 200 with an (almost) empty body means FIDE's backend failed or
+# is withholding data (seen 2026-11-11: report pages returned only a BOM for
+# days). Never read that as "this tournament has no data".
+EMPTY_PAGE_ERROR = "empty response (http 200)"
+EMPTY_PAGE_MAX_BYTES = 200
+
+
+def is_empty_page(content: Optional[bytes]) -> bool:
+    body = (content or b"").replace(b"\xef\xbb\xbf", b"").strip()
+    return len(body) < EMPTY_PAGE_MAX_BYTES
+
+
 # Connection never established: the firewall is dropping or refusing us.
+# Empty pages are treated the same way: stop and wait instead of recording
+# thousands of bogus results.
 _BLOCK_RE = re.compile(
     r"connect ?timeout|connecttimeout|errno 111|connection refused"
-    r"|failed to establish a new connection|http 403",
+    r"|failed to establish a new connection|http 403|empty response",
     re.I,
 )
 # Server reachable but struggling or shedding load.
