@@ -182,7 +182,20 @@ def _dir_io(root: Path):
     return {"list_objects": list_objects, "read_bytes": read_bytes}
 
 
-def test_parts_round_trip(tmp_path):
+def test_parts_round_trip(tmp_path, monkeypatch):
+    import chunk_worker
+    from pipeline_common import stamp_time
+
+    stamps = iter(
+        [
+            "20261101T000000_aaaaaa",  # details: 1 ok, 3 skipped
+            "20261101T010000_bbbbbb",  # 3 skipped again, 1h later
+            "20261102T010000_cccccc",  # 3 skipped again, 25h after the first
+            "20261102T020000_dddddd",  # reports
+        ]
+    )
+    monkeypatch.setattr(chunk_worker, "part_stamp", lambda: next(stamps))
+    t0 = stamp_time("20261101T000000_aaaaaa")
     base = "prod/2024-01"
     month = tmp_path / base
     (month / "data").mkdir(parents=True)
@@ -205,13 +218,20 @@ def test_parts_round_trip(tmp_path):
             Outcome("3", SKIP, {"tournament_code": "3", "error": "no data found"}),
         ]
     )
-    # A single "no data found" is provisional (could be an error page)...
-    assert done_ids("b", base, "details", **io_) == {"1"}
-    # ...confirmed once a second, separate run sees it too.
-    details_flush(
-        [Outcome("3", SKIP, {"tournament_code": "3", "error": "no data found"})]
-    )
-    assert done_ids("b", base, "details", **io_) == {"1", "3"}
+    skip3 = [Outcome("3", SKIP, {"tournament_code": "3", "error": "no data found"})]
+    # A single "no data found" is provisional (could be an error page): not
+    # refetched right away, but not counted as covered either...
+    assert done_ids("b", base, "details", now=t0 + 3600, **io_) == {"1", "3"}
+    assert "3" in load_month("b", base, **io_).coverage().missing_details
+    # ...and refetched once the confirmation gap has passed.
+    assert done_ids("b", base, "details", now=t0 + 25 * 3600, **io_) == {"1"}
+    # A second sighting within the gap does not confirm it (regression:
+    # 2026-11-11 FIDE served empty report pages for days)...
+    details_flush(skip3)
+    assert "3" in load_month("b", base, **io_).coverage().missing_details
+    # ...one a day later does.
+    details_flush(skip3)
+    assert done_ids("b", base, "details", now=t0 + 30 * 3600, **io_) == {"1", "3"}
 
     report = {
         "tournament_code": "1",

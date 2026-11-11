@@ -247,3 +247,37 @@ def test_failures_in_three_runs_are_given_up():
     assert gave_up_ids(runs) == {"9"}
     cov = compute_coverage(["8", "9"], {"8", "9"}, {"8"}, set(), set(), set(), {"9"})
     assert cov.complete and cov.gave_up_reports == ["9"]
+
+
+def test_weak_skip_sightings_must_be_a_day_apart():
+    """Regression: on 2026-11-11 FIDE served empty report pages for days, and
+    two runs minutes apart 'confirmed' thousands of bogus skips."""
+    from coverage import pending_skip_ids, skippable_ids
+    from pipeline_common import stamp_time
+
+    def e(stamp):
+        return {
+            "tournament_code": "1",
+            "error": "no data found",
+            "_file": f"prod/2023-12/reports/tournament_reports_parts/reports_{stamp}_skipped.json",
+        }
+
+    a, b, c = (
+        "20261111T010000_aaaaaa",
+        "20261111T013000_bbbbbb",
+        "20261112T020000_cccccc",
+    )
+    assert skippable_ids([e(a), e(b)]) == set()
+    assert skippable_ids([e(a), e(b), e(c)]) == {"1"}
+    # Provisional while the latest sighting is recent; refetched after the gap.
+    t = stamp_time(b)
+    assert pending_skip_ids([e(a), e(b)], now=t + 3600) == {"1"}
+    assert pending_skip_ids([e(a), e(b)], now=t + 25 * 3600) == set()
+    assert pending_skip_ids([e(a), e(b), e(c)], now=stamp_time(c)) == set()
+    # Legacy chunk files (old pipeline, months earlier) count as separate.
+    legacy = {
+        "tournament_code": "1",
+        "error": "no data found",
+        "_file": "prod/2023-12/reports/tournament_reports_chunks/reports_chunk_3_of_7_skipped.json",
+    }
+    assert skippable_ids([legacy, e(a)]) == {"1"}

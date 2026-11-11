@@ -13,11 +13,20 @@ All output goes to S3 exactly as a Lambda run would write it, and every step
 resumes from what is already stored, so stopping and restarting is safe.
 
 On FideBlocked it waits like the state machine (30m, 1h, 2h, 4h, 4h) and then
-stops with an error. A stuck chunk (no progress with work left) stops too.
+stops everything. A chunk with no progress (every remaining tournament failed)
+is retried after STUCK_WAIT_S, up to GIVE_UP_AFTER_RUNS calls, after which those
+tournaments count as given up (recorded in the failures files). Any other error
+in a month is logged and the run moves on to the next month; the summary at the
+end lists failed months.
+
+A month whose S3 data is already complete skips the chunk loops and goes
+straight to merge + validate, which writes coverage_complete.json.
 
 Examples:
   uv run scripts/run_month_local.py --month 2024-04
   uv run scripts/run_month_local.py --month 2024-01 --month 2024-02 --refresh-list
+  uv run scripts/run_month_local.py --all-prod   # every prod month without
+                                                 # coverage_complete.json, newest first
 """
 
 from __future__ import annotations
@@ -33,11 +42,17 @@ REPO = Path(__file__).resolve().parent.parent
 sys.path[:0] = [str(REPO), str(REPO / "src" / "scraper")]
 
 from fide_http import FideBlocked  # noqa: E402
+from pipeline_common import GIVE_UP_AFTER_RUNS  # noqa: E402
 
 logger = logging.getLogger("run_month_local")
 
 BLOCK_WAITS_S = [1800, 3600, 7200, 14400, 14400]
 CALL_BUDGET_S = 1800  # per worker call; parts are flushed every 50 / 5 min anyway
+STUCK_WAIT_S = 600
+
+
+class StillBlocked(SystemExit):
+    """FIDE kept blocking after every wait: stop the whole run."""
 
 
 class Budget:
@@ -65,11 +80,14 @@ def call_with_block_waits(name: str, fn, event: dict) -> dict:
             return fn(dict(event), Budget(CALL_BUDGET_S))
         except FideBlocked as e:
             last = e
-    raise SystemExit(f"{name}: still blocked after all waits: {last}")
+    raise StillBlocked(f"{name}: still blocked after all waits: {last}")
 
 
 def loop_until_done(name: str, fn, event: dict) -> dict:
-    """Call fn again while remaining > 0 and progress > 0 (the ASL Choice)."""
+    """Call fn again while remaining > 0 (the ASL Choice). Calls with no
+    progress are retried after STUCK_WAIT_S; each writes a failures file, so
+    after GIVE_UP_AFTER_RUNS of them the failing tournaments count as given up."""
+    stuck = 0
     while True:
         r = call_with_block_waits(name, fn, event)
         rem, prog = r.get("remaining", 0), r.get("progress", 0)
@@ -83,18 +101,27 @@ def loop_until_done(name: str, fn, event: dict) -> dict:
         )
         if rem <= 0:
             return r
-        if prog <= 0:
-            raise SystemExit(
+        if prog > 0:
+            stuck = 0
+            continue
+        stuck += 1
+        if stuck >= GIVE_UP_AFTER_RUNS + 1:
+            raise RuntimeError(
                 f"{name} stuck: {rem} remaining, no progress. "
                 f"Failures: {r.get('failed_sample')}"
             )
+        logger.warning(
+            "%s: no progress (%s remaining); retrying in %d min",
+            name,
+            rem,
+            STUCK_WAIT_S // 60,
+        )
+        time.sleep(STUCK_WAIT_S)
 
 
 def run_month(year: int, month: int, args) -> dict:
     from handlers import details_chunk, ensure_run_name, reports_chunk, split_ids
     from handlers import tournaments
-    import merge_chunks
-    import validate_pipeline
 
     run_type = args.run_type
     run_name = f"{year}-{month:02d}" if run_type == "prod" else args.run_name
@@ -119,6 +146,20 @@ def run_month(year: int, month: int, args) -> dict:
     logger.info("=== %s: tournament list", run_name)
     loop_until_done(f"{run_name} tournaments", tournaments.lambda_handler, base_event)
 
+    from coverage import load_month
+
+    base = f"{run_type}/{run_name}"
+    cov = load_month(args.bucket, base).coverage()
+    if not cov.missing_details and not cov.missing_reports:
+        logger.info("=== %s: already complete in S3; merge + validate only", run_name)
+        return finish(run_name, run_type, args, t0)
+    logger.info(
+        "=== %s: %d details and %d reports missing",
+        run_name,
+        len(cov.missing_details),
+        len(cov.missing_reports),
+    )
+
     logger.info("=== %s: split", run_name)
     split = split_ids.lambda_handler(dict(base_event), None)
     if not split.get("success", True) or not split.get("chunks"):
@@ -134,6 +175,13 @@ def run_month(year: int, month: int, args) -> dict:
         label = f"{run_name} chunk {c['chunk_index']}/{c['chunk_count']}"
         loop_until_done(f"{label} details", details_chunk.lambda_handler, ev)
         loop_until_done(f"{label} reports", reports_chunk.lambda_handler, ev)
+
+    return finish(run_name, run_type, args, t0)
+
+
+def finish(run_name: str, run_type: str, args, t0: float) -> dict:
+    import merge_chunks
+    import validate_pipeline
 
     logger.info("=== %s: merge + validate", run_name)
     m = merge_chunks.run(args.bucket, run_type, run_name)
@@ -155,8 +203,12 @@ def run_month(year: int, month: int, args) -> dict:
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
+    ap.add_argument("--month", action="append", help="YYYY-MM (repeatable)")
     ap.add_argument(
-        "--month", action="append", required=True, help="YYYY-MM (repeatable)"
+        "--all-prod",
+        action="store_true",
+        help="every prod month with an ID list but no coverage_complete.json, "
+        "newest first",
     )
     ap.add_argument("--bucket", default="fide-glicko")
     ap.add_argument("--rate", type=float, default=0.3, help="requests/s per step")
@@ -179,12 +231,54 @@ def main() -> int:
     if args.rate > 0.5:
         raise SystemExit("--rate above 0.5 req/s is not allowed (FIDE blocks per IP)")
 
-    results = []
-    for m in args.month:
+    months = list(args.month or [])
+    if args.all_prod:
+        months += [m for m in pending_prod_months(args.bucket) if m not in months]
+    if not months:
+        raise SystemExit("give --month or --all-prod")
+    logger.info("%d months to run: %s", len(months), " ".join(months))
+
+    from coverage import IncompleteRunError
+
+    results, failed, pending = [], [], []
+    for i, m in enumerate(months, 1):
+        logger.info("##### month %d of %d: %s", i, len(months), m)
         y, mo = (int(x) for x in m.split("-"))
-        results.append(run_month(y, mo, args))
-    print(json.dumps(results, indent=2))
-    return 0
+        try:
+            results.append(run_month(y, mo, args))
+        except StillBlocked:
+            raise
+        except IncompleteRunError as e:
+            # Usually provisional "no data" skips waiting for a confirming
+            # sighting a day later; the next --all-prod run finishes them.
+            logger.warning("%s not complete yet; moving on: %s", m, e)
+            pending.append({"month": m, "reason": str(e)[:300]})
+        except Exception as e:  # one bad month must not stop the backfill
+            logger.exception("%s failed; moving on", m)
+            failed.append({"month": m, "error": f"{type(e).__name__}: {e}"[:500]})
+    print(json.dumps({"done": results, "pending": pending, "failed": failed}, indent=2))
+    return 1 if failed else 0
+
+
+def pending_prod_months(bucket: str) -> list[str]:
+    """prod months with data/tournament_ids.txt and no completion marker."""
+    import boto3
+
+    s3 = boto3.client("s3")
+    have_ids, complete = set(), set()
+    for page in s3.get_paginator("list_objects_v2").paginate(
+        Bucket=bucket, Prefix="prod/"
+    ):
+        for o in page.get("Contents", []):
+            parts = o["Key"].split("/")
+            if len(parts) < 4:
+                continue
+            month, rest = parts[1], "/".join(parts[2:])
+            if rest == "data/tournament_ids.txt" and o["Size"] > 1:
+                have_ids.add(month)
+            elif rest == "reports/coverage_complete.json":
+                complete.add(month)
+    return sorted(have_ids - complete, reverse=True)
 
 
 if __name__ == "__main__":

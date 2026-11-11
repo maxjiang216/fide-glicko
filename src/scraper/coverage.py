@@ -33,11 +33,13 @@ import pyarrow.compute as pc
 from pipeline_common import (  # noqa: F401 (re-exported)
     GIVE_UP_AFTER_RUNS,
     SKIP_CONFIRMATIONS,
+    SKIP_CONFIRM_GAP_S,
     STRONG_SKIP_REASONS,
     DETAILS_SKIPPABLE_ERRORS,
     SKIPPABLE_ERRORS,
     parse_ids,
     part_stamp,
+    stamp_time,
 )
 
 logger = logging.getLogger(__name__)
@@ -131,6 +133,36 @@ def successful_details(table: pa.Table) -> pa.Table:
     return table.filter(mask)
 
 
+def _weak_sightings(skipped_entries, reasons):
+    """(strong ids, {tid: {file: stamp time or None}}) for weak skip reasons."""
+    from collections import defaultdict
+
+    strong: set[str] = set()
+    weak: dict[str, dict] = defaultdict(dict)
+    for i, e in enumerate(skipped_entries):
+        tid, err = e.get("tournament_code"), e.get("error")
+        if tid is None or err not in reasons:
+            continue
+        if err in STRONG_SKIP_REASONS:
+            strong.add(str(tid))
+        else:
+            f = e.get("_file", i)
+            weak[str(tid)][f] = stamp_time(str(f))
+    return strong, weak
+
+
+def _confirmed(files: dict) -> bool:
+    """Seen in SKIP_CONFIRMATIONS files at least SKIP_CONFIRM_GAP_S apart.
+    Legacy chunk files (no stamp) are months older than any part file, so
+    each counts as its own well-separated sighting."""
+    legacy = sum(1 for t in files.values() if t is None)
+    times = sorted(t for t in files.values() if t is not None)
+    sightings = legacy + (1 if times else 0)
+    if times and times[-1] - times[0] >= SKIP_CONFIRM_GAP_S:
+        sightings += 1
+    return sightings >= SKIP_CONFIRMATIONS
+
+
 def skippable_ids(
     skipped_entries: Iterable[dict], reasons: frozenset = SKIPPABLE_ERRORS
 ) -> set[str]:
@@ -140,22 +172,32 @@ def skippable_ids(
     ("no data found", "no players found") only mean an expected table was
     missing, which a maintenance or error page served with HTTP 200 would also
     cause, so they count only once seen in SKIP_CONFIRMATIONS separate files
-    (separate worker runs). Entries carry their source file in "_file".
+    at least SKIP_CONFIRM_GAP_S apart. Entries carry their source file in
+    "_file".
     """
-    from collections import defaultdict
+    strong, weak = _weak_sightings(skipped_entries, reasons)
+    return strong | {t for t, files in weak.items() if _confirmed(files)}
 
-    weak_files: dict[str, set] = defaultdict(set)
-    ok: set[str] = set()
-    for i, e in enumerate(skipped_entries):
-        tid, err = e.get("tournament_code"), e.get("error")
-        if tid is None or err not in reasons:
+
+def pending_skip_ids(
+    skipped_entries: Iterable[dict],
+    reasons: frozenset = SKIPPABLE_ERRORS,
+    now: float | None = None,
+) -> set[str]:
+    """Weak skips not yet confirmed whose latest sighting is too recent to
+    confirm. Workers leave them alone until the gap has passed."""
+    import time as _time
+
+    now = _time.time() if now is None else now
+    _, weak = _weak_sightings(skipped_entries, reasons)
+    out = set()
+    for t, files in weak.items():
+        if _confirmed(files):
             continue
-        if err in STRONG_SKIP_REASONS:
-            ok.add(str(tid))
-        else:
-            weak_files[str(tid)].add(e.get("_file", i))
-    ok |= {t for t, files in weak_files.items() if len(files) >= SKIP_CONFIRMATIONS}
-    return ok
+        times = [x for x in files.values() if x is not None]
+        if times and now - max(times) < SKIP_CONFIRM_GAP_S:
+            out.add(t)
+    return out
 
 
 def compute_coverage(
@@ -377,10 +419,12 @@ def done_ids(
     *,
     list_objects: ListObjects | None = None,
     read_bytes: ReadBytes | None = None,
+    now: float | None = None,
 ) -> set[str]:
     """
-    Tournaments already done for this month in any chunk or part file.
-    kind: "details" or "reports". Reads only the ID columns it needs.
+    Tournaments a worker should not fetch now: done in any chunk or part
+    file, confirmed or still-provisional skips (see pending_skip_ids), or
+    given up. kind: "details" or "reports". Reads only the ID columns it needs.
     """
     list_objects, read_bytes = _default_io(list_objects, read_bytes)
     files = list_month_files(bucket, base, list_objects)
@@ -393,7 +437,12 @@ def done_ids(
         gave_up = gave_up_ids(
             _read_json_files(read_bytes, bucket, files.details_failures)
         )
-        return done | skippable_ids(skipped, DETAILS_SKIPPABLE_ERRORS) | gave_up
+        return (
+            done
+            | skippable_ids(skipped, DETAILS_SKIPPABLE_ERRORS)
+            | pending_skip_ids(skipped, DETAILS_SKIPPABLE_ERRORS, now)
+            | gave_up
+        )
     if kind == "reports":
         tables = _read_tables(read_bytes, bucket, files.players, ["tournament_id"])
         done = set().union(*(tournament_ids(t) for t in tables))
@@ -401,7 +450,9 @@ def done_ids(
         gave_up = gave_up_ids(
             _read_json_files(read_bytes, bucket, files.reports_failures)
         )
-        return done | skippable_ids(skipped) | gave_up
+        return (
+            done | skippable_ids(skipped) | pending_skip_ids(skipped, now=now) | gave_up
+        )
     raise ValueError(f"kind must be details or reports (got {kind!r})")
 
 
